@@ -22,8 +22,8 @@ def quick_cleanup(client_id: str):
     processor = DocumentProcessor(client_id=client_id)
 
     # ИСПРАВЛЕНО: Правильные пути к данным клиента
-    client_docs_path = settings.DOCUMENTS_DIR / client_id
-    client_faiss_path = settings.FAISS_INDEX_DIR / "clients" / client_id  # Добавлено "clients"
+    client_docs_path = settings.CLIENTS_DIR / client_id / "documents"  # ✅ Документы в папке клиента
+    client_faiss_path = settings.CLIENTS_DIR / client_id
 
     if not client_docs_path.exists() and not client_faiss_path.exists():
         print(f"❌ Нет данных для клиента {client_id}")

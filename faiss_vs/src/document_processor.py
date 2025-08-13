@@ -19,7 +19,7 @@ class DocumentProcessor:
 
     def __init__(self, client_id: str):
         self.client_id = client_id
-        self.document_loader = DocumentLoader()
+        self.document_loader = DocumentLoader(client_id=client_id)
         self.document_parser = DocumentParser()
         self.chunker = DocumentChunker()
         self.image_processor = ImageProcessor()
@@ -140,6 +140,9 @@ class DocumentProcessor:
                         })
                         logger.info(f"Создано {len(chunks)} чанков для {file_path.name}")
                         logger.info(f"Метаданные первого чанка: {chunks[0].metadata}")
+                        if not settings.KEEP_DOWNLOADED_FILES:
+                            file_path.unlink()  # Удаляем файл
+                            logger.info(f"Файл {file_path.name} удален после обработки")
 
                 except Exception as e:
                     error_msg = f"Ошибка при обработке {doc_info.get('file_path', 'unknown')}: {e}"

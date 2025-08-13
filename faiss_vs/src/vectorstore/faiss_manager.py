@@ -33,7 +33,8 @@ class FAISSManager:
         self.dimension = settings.EMBEDDING_DIMENSION
 
         # Создаем структуру папок: faiss_index/clients/client_id
-        clients_dir = settings.FAISS_INDEX_DIR / "clients"
+        # clients_dir = settings.FAISS_INDEX_DIR / "clients"
+        clients_dir = settings.CLIENTS_DIR
         clients_dir.mkdir(parents=True, exist_ok=True)
 
         self.client_dir = clients_dir / client_id

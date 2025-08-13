@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     FAISS_INDEX_DIR: Path = DATA_DIR / "faiss_index"
     CLIENTS_DIR: Path = FAISS_INDEX_DIR / "clients"  # Новая папка для клиентов
 
+    KEEP_DOWNLOADED_FILES: bool = False  # Удалять файлы после обработки
+
     # Embedding settings
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBEDDING_DIMENSION: int = 384
@@ -35,6 +37,17 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT: int = 30
     MAX_RETRIES: int = 3
 
+    def get_client_dir(self, client_id: str) -> Path:
+        """Получить папку клиента"""
+        client_dir = self.CLIENTS_DIR / client_id
+        client_dir.mkdir(parents=True, exist_ok=True)
+        return client_dir
+
+    def get_client_documents_dir(self, client_id: str) -> Path:
+        """Получить папку документов клиента (временную)"""
+        docs_dir = self.get_client_dir(client_id) / "temp_documents"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        return docs_dir
     class Config:
         env_file = ".env"
 

@@ -11,7 +11,7 @@ venv/
 # Project-specific folders
 faiss_vs/data/documents/
 faiss_vs/data/processed/
-faiss_vs/faiss_index/
+faiss_vs/data/faiss_index/
 
 # Logs
 nohup.out
