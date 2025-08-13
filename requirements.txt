@@ -1,0 +1,35 @@
+# Core RAG dependencies
+langchain==0.1.0
+langchain-community==0.0.10
+faiss-cpu==1.7.4
+sentence-transformers>=2.2.2
+
+# Document processing
+PyPDF2==3.0.1
+python-docx==1.1.0
+python-pptx==0.6.23
+openpyxl==3.1.2
+beautifulsoup4==4.12.2
+requests==2.31.0
+
+# Image processing
+Pillow==10.0.1
+# easyocr==1.7.0  # Раскомментируйте для OCR изображений
+
+# Text processing
+nltk==3.8.1
+
+# API and web
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+pydantic-settings>=2.0.0
+
+# Utils
+numpy>=1.26
+pandas==2.0.3
+python-dotenv==1.0.0
+tqdm==4.66.1
+
+# Fix compatibility issues
+huggingface_hub>=0.15.0

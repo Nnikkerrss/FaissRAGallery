@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.env*
+*.sqlite3
+
+# Project-specific folders
+faiss_vs/data/documents/
+faiss_vs/data/processed/
+faiss_vs/faiss_index/
+
+# Logs
+nohup.out
+server.log
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
