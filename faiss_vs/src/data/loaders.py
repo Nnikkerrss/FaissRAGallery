@@ -118,10 +118,10 @@ class DocumentLoader:
         results = []
 
         for doc_info in documents:
-            # Поддержка разных форматов URL
-            url = doc_info.get('url') or doc_info.get('ID')
+            # ID содержит ссылку на файл
+            url = doc_info.get('ID')  # ✅ Берем из ID
             if not url:
-                print(f"Пропущен документ без URL: {doc_info}")
+                print(f"Пропущен документ без ID: {doc_info}")
                 continue
 
             print(f"Обрабатываем: {url}")
@@ -141,31 +141,54 @@ class DocumentLoader:
             file_path = self.download_document(url, custom_filename)
 
             if file_path and file_path.exists():
-                # ИСПРАВЛЕНО: правильно маппим поля БЕЗ ДУБЛИРОВАНИЯ
+                # ИСПРАВЛЕНО: правильно маппим поля
                 metadata = {}
 
                 print(f"DEBUG: Исходные данные для {file_path.name}:")
                 print(f"       doc_info = {doc_info}")
 
-                # Копируем ВСЕ поля из исходного JSON, приводя к единому формату
+                # Правильный маппинг полей из 1С JSON
+                field_mapping = {
+                    'Description': 'description',
+                    'Parent': 'parent',
+                    'Date': 'date',
+                    'GuidDoc': 'guid_doc',
+                    'Object_ID': 'object_id',
+                    'ID': 'source_url'  # ✅ ID содержит ссылку на файл
+                }
+
+                # Сначала применяем правильный маппинг
+                for source_field, target_field in field_mapping.items():
+                    if source_field in doc_info:
+                        metadata[target_field] = doc_info[source_field]
+                        print(f"       Маппинг: {source_field} → {target_field} = '{doc_info[source_field]}'")
+
+                print(f"       URL variable: '{url}'")
+                print(f"       metadata['source_url']: '{metadata.get('source_url')}'")
+                print(f"       doc_info['ID']: '{doc_info.get('ID')}'")
+
+                # Затем добавляем остальные поля в нижнем регистре
                 for key, value in doc_info.items():
-                    # Пропускаем только служебные поля
-                    if key not in ['url', 'filename']:
-                        # Используем ТОЛЬКО нормализованную версию ключа (нижний регистр)
+                    if key not in field_mapping and key not in ['url', 'filename']:
                         normalized_key = key.lower()
                         metadata[normalized_key] = value
 
+                print(f"       ФИНАЛЬНАЯ metadata['source_url']: '{metadata.get('source_url')}'")
+                print(f"       ФИНАЛЬНАЯ metadata['description']: '{metadata.get('description')}'")
+
                 # Добавляем стандартные маппинги ТОЛЬКО если их еще нет
-                if 'description' in metadata and metadata['description'] and 'title' not in metadata:
+                if metadata.get('description') and not metadata.get('title'):
                     metadata['title'] = metadata['description']
 
-                if 'parent' in metadata and metadata['parent'] and 'category' not in metadata:
+                if metadata.get('parent') and not metadata.get('category'):
                     metadata['category'] = metadata['parent']
 
                 print(f"DEBUG: Финальные метаданные для {file_path.name}:")
                 print(f"       {len(metadata)} полей: {list(metadata.keys())}")
-                for k, v in metadata.items():
-                    print(f"       {k} = '{v}'")
+                print(f"       description = '{metadata.get('description')}'")
+                print(f"       title = '{metadata.get('title')}'")
+                print(f"       parent = '{metadata.get('parent')}'")
+                print(f"       guid_doc = '{metadata.get('guid_doc')}'")
 
                 results.append({
                     'file_path': file_path,
@@ -174,7 +197,6 @@ class DocumentLoader:
                 })
 
         return results
-
 
 class DocumentParser:
     """Парсер для извлечения текста из различных форматов документов"""

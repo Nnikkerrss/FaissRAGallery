@@ -253,42 +253,51 @@ class DocumentProcessor:
 
             return text, None, enhanced_metadata
 
+    # В document_processor.py в функции _create_enhanced_metadata ЗАМЕНИТЕ:
+
     def _create_enhanced_metadata(self, original_metadata: Dict, url: str,
                                   file_path: Path, doc_metadata: Any) -> Dict[str, Any]:
         """Создает расширенные метаданные"""
-        enhanced_metadata = {
-            # Исходные метаданные из JSON (самые важные!)
-            'source_url': url,
-            'title': original_metadata.get('title', ''),
-            'description': original_metadata.get('description', ''),
-            'date': original_metadata.get('date', ''),
-            'guid_doc': original_metadata.get('guid', ''),
-            'parent': original_metadata.get('parent', ''),
-            'object_id': original_metadata.get('object_id', ''),
-            'category': original_metadata.get('category', original_metadata.get('parent', 'uncategorized')),
 
-            # Метаданные файла
+        # Сначала копируем все из original_metadata
+        enhanced_metadata = {}
+
+        # Базовые метаданные файла
+        enhanced_metadata.update({
             'file_type': file_path.suffix.lower(),
             'filename': file_path.name,
             'file_size': file_path.stat().st_size if file_path.exists() else 0,
-            'is_image': self._is_image_file(file_path),  # ✅ НОВОЕ
-
-            # Метаданные обработки
             'processing_date': datetime.now().isoformat(),
             'client_id': self.client_id,
-            'multimodal_processing': self.enable_visual_search,  # ✅ НОВОЕ
+        })
 
-            # Метаданные документа (если есть)
-            **(doc_metadata.__dict__ if doc_metadata else {}),
+        # Добавляем метаданные документа (если есть)
+        if doc_metadata:
+            enhanced_metadata.update(doc_metadata.__dict__)
 
-            # ВСЕ остальные поля из исходного JSON
-            **{k: v for k, v in original_metadata.items()
-               if k not in ['title', 'description', 'date', 'guid', 'parent', 'object_id', 'category']}
-        }
+        # КОПИРУЕМ ВСЕ из original_metadata (БЕЗ ПЕРЕЗАПИСИ!)
+        for key, value in original_metadata.items():
+            if key not in enhanced_metadata:  # ✅ Только если ключа еще нет
+                enhanced_metadata[key] = value
+
+        # Убеждаемся что ключевые поля точно есть
+        if 'source_url' not in enhanced_metadata or not enhanced_metadata['source_url']:
+            enhanced_metadata['source_url'] = url
+
+        if 'category' not in enhanced_metadata or not enhanced_metadata['category']:
+            enhanced_metadata['category'] = enhanced_metadata.get('parent', 'uncategorized')
+
+        if 'title' not in enhanced_metadata or not enhanced_metadata['title']:
+            enhanced_metadata['title'] = enhanced_metadata.get('description', file_path.stem)
+
+        # ОТЛАДКА
+        logger.info(f"🔧 DEBUG enhanced_metadata результат для {file_path.name}:")
+        logger.info(f"   enhanced_metadata['source_url']: '{enhanced_metadata.get('source_url')}'")
+        logger.info(f"   enhanced_metadata['description']: '{enhanced_metadata.get('description')}'")
+        logger.info(f"   enhanced_metadata['title']: '{enhanced_metadata.get('title')}'")
+        logger.info(f"   enhanced_metadata keys count: {len(enhanced_metadata)}")
 
         return enhanced_metadata
-
-    # ✅ НОВЫЕ методы поиска
 
     def search_documents(self, query: str = None, k: int = 5,
                          min_score: float = 0.0,
