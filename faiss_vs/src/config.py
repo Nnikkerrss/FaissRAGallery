@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     CLIENTS_DIR: Path = FAISS_INDEX_DIR / "clients"
 
     # Embedding settings
-    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
-    EMBEDDING_DIMENSION: int = 384
+    EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large"
+    EMBEDDING_DIMENSION: int = 1024
 
     # ✅ НОВЫЕ настройки для CLIP
     CLIP_MODEL: str = "ViT-B/32"
@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     DEVICE: str = "auto"  # "cuda", "cpu" или "auto"
 
     # Chunking settings
-    CHUNK_SIZE: int = 1000
-    CHUNK_OVERLAP: int = 200
+    CHUNK_SIZE: int = 800
+    CHUNK_OVERLAP: int = 150
 
     # FAISS settings
     FAISS_INDEX_TYPE: str = "FlatIP"
