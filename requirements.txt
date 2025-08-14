@@ -5,6 +5,10 @@ langchain-community==0.0.10
 faiss-cpu==1.7.4
 sentence-transformers>=2.2.2
 
+transformers==4.44.2
+torch==2.3.0
+# CLIP (официальная версия с GitHub)
+git+https://github.com/openai/CLIP.git
 # Document processing
 PyPDF2==3.0.1
 python-docx==1.1.0

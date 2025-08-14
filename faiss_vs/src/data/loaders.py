@@ -30,7 +30,7 @@ class DocumentMetadata:
 
 
 class DocumentLoader:
-    def __init__(self, client_id: str = None):
+    def __init__(self, client_id: str = None):  # ✅ ДОБАВЛЕН client_id
         self.client_id = client_id
         self.session = requests.Session()
         self.session.headers.update({
@@ -86,9 +86,14 @@ class DocumentLoader:
             if file_ext not in settings.SUPPORTED_EXTENSIONS:
                 print(f"Предупреждение: Неподдерживаемое расширение {file_ext} для {filename}")
 
-            # Сохраняем файл
-            # file_path = settings.DOCUMENTS_DIR / filename
-            file_path = settings.get_client_documents_dir(self.client_id) / filename
+            # ✅ ИЗМЕНЕН путь сохранения - используем client_id
+            if self.client_id:
+                file_path = settings.get_client_temp_documents_dir(self.client_id) / filename
+            else:
+                # Fallback для совместимости
+                temp_dir = settings.DATA_DIR / "temp"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                file_path = temp_dir / filename
 
             # Проверяем размер файла
             content_length = response.headers.get('content-length')

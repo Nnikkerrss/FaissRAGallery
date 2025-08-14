@@ -10,11 +10,13 @@ import requests
 from urllib.parse import urlparse, parse_qs
 import logging
 from typing import Optional, Dict, Any
+
 # Добавляем src в путь
 sys.path.append(str(Path(__file__).parent))
 
-from src.document_processor import DocumentProcessor
-from src.config import settings
+# ✅ ИСПРАВЛЕНО: Правильные импорты с относительными путями
+from .src.document_processor import DocumentProcessor
+from .src.config import settings
 
 
 class DocumentLoader:
@@ -74,8 +76,8 @@ class DocumentLoader:
         Returns:
             str: Путь к сохраненному файлу
         """
-        # folder_path = Path("faiss") / "clients" / client_id
-        folder_path = settings.FAISS_INDEX_DIR / "clients" / client_id
+        # ✅ ИСПРАВЛЕНО: Используем правильный путь
+        folder_path = settings.CLIENTS_DIR / client_id
         folder_path.mkdir(parents=True, exist_ok=True)
 
         filename = folder_path / "data.json"
@@ -88,25 +90,32 @@ class DocumentLoader:
 
     def filter_processable_documents(self, documents: list) -> list:
         """
-        Фильтрует документы, оставляя только обрабатываемые (PDF)
+        Фильтрует документы, оставляя только обрабатываемые
 
         Args:
             documents: Список документов из JSON
 
         Returns:
-            list: Отфильтрованные PDF документы
+            list: Отфильтрованные документы для обработки
         """
-        pdf_docs = [doc for doc in documents if doc['ID'].lower().endswith('.pdf')]
+        # ✅ ОБНОВЛЕНО: Поддерживаем все типы файлов, включая изображения
+        processable_docs = []
 
-        self.logger.info(f"Всего документов: {len(documents)}, PDF для обработки: {len(pdf_docs)}")
-        return pdf_docs
+        for doc in documents:
+            url = doc.get('ID', '').lower()
+            if any(url.endswith(ext) for ext in settings.SUPPORTED_EXTENSIONS):
+                processable_docs.append(doc)
 
-    def process_documents(self, json_url: str) -> Dict[str, Any]:
+        self.logger.info(f"Всего документов: {len(documents)}, для обработки: {len(processable_docs)}")
+        return processable_docs
+
+    def process_documents(self, json_url: str, enable_visual_search: bool = None) -> Dict[str, Any]:
         """
         Основная функция для обработки документов
 
         Args:
             json_url: URL для загрузки JSON с данными о документах
+            enable_visual_search: Включить визуальный поиск (None = автоопределение)
 
         Returns:
             Dict: Статистика обработки
@@ -123,29 +132,40 @@ class DocumentLoader:
 
             # Фильтруем документы
             documents = data.get('result', [])
-            pdf_docs = self.filter_processable_documents(documents)
+            processable_docs = self.filter_processable_documents(documents)
 
-            if not pdf_docs:
-                self.logger.warning("Нет PDF документов для обработки")
+            if not processable_docs:
+                self.logger.warning("Нет документов для обработки")
                 return {
                     'success': False,
-                    'error': 'Нет PDF документов для обработки',
+                    'error': 'Нет поддерживаемых документов для обработки',
                     'client_id': client_id,
                     'total_documents': len(documents),
-                    'pdf_documents': 0
+                    'processable_documents': 0
                 }
 
-            # Создаем процессор документов
-            processor = DocumentProcessor(client_id=client_id)
+            # ✅ ОБНОВЛЕНО: Создаем процессор с поддержкой мультимодальности
+            if enable_visual_search is None:
+                # Автоопределение: включаем визуальный поиск если есть изображения
+                image_docs = [doc for doc in processable_docs
+                              if doc.get('ID', '').lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'))]
+                enable_visual_search = len(image_docs) > 0
+
+                if enable_visual_search:
+                    self.logger.info(
+                        f"Автоопределение: найдено {len(image_docs)} изображений, включаем визуальный поиск")
+
+            processor = DocumentProcessor(client_id=client_id, enable_visual_search=enable_visual_search)
 
             # Обрабатываем документы
-            self.logger.info(f"Начинаем обработку {len(pdf_docs)} PDF документов...")
+            self.logger.info(f"Начинаем обработку {len(processable_docs)} документов...")
             stats = processor.process_documents_from_json(json_path)
 
             # Дополняем статистику
             stats['success'] = True
             stats['client_id'] = client_id
             stats['json_path'] = json_path
+            stats['enable_visual_search'] = enable_visual_search
 
             self.logger.info(f"Обработка завершена. Успешно проиндексировано: {stats['indexed']} документов")
 
@@ -173,7 +193,7 @@ class DocumentLoader:
             return {
                 'success': True,
                 'client_id': client_id,
-                'index_exists': stats.get('total_vectors', 0) > 0,
+                'index_exists': stats.get('total_chunks', 0) > 0,
                 'statistics': stats
             }
 
@@ -185,13 +205,15 @@ class DocumentLoader:
             }
 
 
-def load_documents_from_url(json_url: str, log_level: str = "INFO") -> Dict[str, Any]:
+def load_documents_from_url(json_url: str, log_level: str = "INFO", enable_visual_search: bool = None) -> Dict[
+    str, Any]:
     """
     Функция для загрузки документов из 1С API
 
     Args:
         json_url: URL API 1С с данными о документах
         log_level: Уровень логирования (DEBUG, INFO, WARNING, ERROR)
+        enable_visual_search: Включить визуальный поиск (None = автоопределение)
 
     Returns:
         Dict: Результат обработки со статистикой
@@ -199,12 +221,13 @@ def load_documents_from_url(json_url: str, log_level: str = "INFO") -> Dict[str,
     Example:
         >>> result = load_documents_from_url(
         ...     "https://1c.gwd.ru/services/hs/Request/GetData/GetAllFiles"
-        ...     "?api_key=xxx&client_id=xxx"
+        ...     "?api_key=xxx&client_id=xxx",
+        ...     enable_visual_search=True
         ... )
         >>> print(f"Обработано: {result['indexed']} документов")
     """
     loader = DocumentLoader(log_level=log_level)
-    return loader.process_documents(json_url)
+    return loader.process_documents(json_url, enable_visual_search=enable_visual_search)
 
 
 def get_client_status(client_id: str) -> Dict[str, Any]:
@@ -224,24 +247,47 @@ def get_client_status(client_id: str) -> Dict[str, Any]:
 if __name__ == "__main__":
     """
     Использование из командной строки:
-    python document_loader.py <json_url>
+    python faiss_loader.py <json_url> [--visual]
     """
-    if len(sys.argv) != 2:
-        print("Использование: python document_loader.py <json_url>")
+    if len(sys.argv) < 2:
+        print("Использование:")
+        print("  python faiss_loader.py <json_url>")
+        print("  python faiss_loader.py <json_url> --visual")
+        print("  python faiss_loader.py <json_url> --no-visual")
+        print()
+        print("Примеры:")
+        print(
+            "  python faiss_loader.py 'https://1c.gwd.ru/services/hs/Request/GetData/GetAllFiles?api_key=xxx&client_id=123'")
+        print("  python faiss_loader.py 'https://...' --visual  # Принудительно включить визуальный поиск")
+        print("  python faiss_loader.py 'https://...' --no-visual  # Только текстовый поиск")
         sys.exit(1)
 
     json_url = sys.argv[1]
 
+    # Определяем режим
+    enable_visual_search = None
+    if len(sys.argv) > 2:
+        if sys.argv[2] == '--visual':
+            enable_visual_search = True
+        elif sys.argv[2] == '--no-visual':
+            enable_visual_search = False
+
     try:
-        result = load_documents_from_url(json_url)
+        result = load_documents_from_url(json_url, enable_visual_search=enable_visual_search)
 
         if result['success']:
             print(f"✅ Успешно обработано {result['indexed']} документов")
             print(f"Client ID: {result['client_id']}")
+            print(f"Визуальный поиск: {'включен' if result.get('enable_visual_search') else 'выключен'}")
             print(f"Всего документов: {result['total_documents']}")
             print(f"Скачано: {result['downloaded']}")
             print(f"Проанализировано: {result['parsed']}")
             print(f"Создано чанков: {result['chunked']}")
+
+            if result.get('enable_visual_search'):
+                print(f"Изображений обработано: {result.get('images_processed', 0)}")
+                print(f"Визуальных векторов: {result.get('visual_vectors_created', 0)}")
+
         else:
             print(f"❌ Ошибка: {result.get('error', 'Неизвестная ошибка')}")
             sys.exit(1)

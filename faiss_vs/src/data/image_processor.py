@@ -5,19 +5,32 @@
 import base64
 import requests
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 from PIL import Image
 import io
+import numpy as np
+import logging
 
 # Для OCR можно использовать:
 # - EasyOCR (простой в установке)
 # - Tesseract (более мощный, но требует установки)
 try:
     import easyocr
-
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
+
+# ✅ НОВОЕ: Импорты для CLIP
+try:
+    import torch
+    import clip
+    CLIP_AVAILABLE = True
+except ImportError:
+    CLIP_AVAILABLE = False
+
+from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class ImageProcessor:
@@ -146,6 +159,245 @@ class ImageProcessor:
         return combined_text
 
 
+# ✅ НОВЫЙ КЛАСС: Мультимодальный процессор с CLIP
+class MultiModalProcessor:
+    """Процессор для мультимодальной обработки изображений и текста с CLIP"""
+
+    def __init__(self, device: Optional[str] = None):
+        """
+        Инициализация мультимодального процессора
+
+        Args:
+            device: Устройство для вычислений ('cuda', 'cpu' или None для автоопределения)
+        """
+        if not CLIP_AVAILABLE:
+            raise ImportError("CLIP не установлен. Установите: pip install git+https://github.com/openai/CLIP.git")
+
+        # Определяем устройство
+        if device is None:
+            self.device = settings.get_device_for_processing()
+        else:
+            self.device = device
+
+        logger.info(f"Инициализация MultiModalProcessor на устройстве: {self.device}")
+
+        # Инициализируем CLIP модель
+        self.clip_model = None
+        self.clip_preprocess = None
+        self.visual_embedding_dim = settings.VISUAL_EMBEDDING_DIMENSION
+
+        # Текстовый процессор (существующий)
+        self.text_processor = ImageProcessor()
+
+        # Загружаем модель при первом использовании (lazy loading)
+        self._initialize_clip_model()
+
+    def _initialize_clip_model(self):
+        """Инициализирует CLIP модель"""
+        try:
+            logger.info(f"Загружаем CLIP модель {settings.CLIP_MODEL}...")
+            self.clip_model, self.clip_preprocess = clip.load(settings.CLIP_MODEL, device=self.device)
+            self.clip_model.eval()  # Режим инференса
+            logger.info(f"✅ CLIP модель загружена на {self.device}")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки CLIP модели: {e}")
+            raise Exception(f"Не удалось загрузить CLIP модель: {e}")
+
+    def create_visual_embedding(self, image_path: Path) -> np.ndarray:
+        """
+        Создает визуальный эмбеддинг изображения с помощью CLIP
+
+        Args:
+            image_path: Путь к изображению
+
+        Returns:
+            np.ndarray: Нормализованный визуальный вектор
+        """
+        try:
+            # Загружаем и предобрабатываем изображение
+            image = Image.open(image_path).convert('RGB')
+            image_input = self.clip_preprocess(image).unsqueeze(0).to(self.device)
+
+            # Создаем эмбеддинг
+            with torch.no_grad():
+                image_features = self.clip_model.encode_image(image_input)
+                # Нормализуем для cosine similarity
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+            # Конвертируем в numpy
+            visual_vector = image_features.cpu().numpy().flatten()
+
+            logger.debug(f"Создан визуальный вектор для {image_path.name}: {visual_vector.shape}")
+            return visual_vector.astype(np.float32)
+
+        except Exception as e:
+            logger.error(f"Ошибка создания визуального эмбеддинга для {image_path}: {e}")
+            # Возвращаем нулевой вектор в случае ошибки
+            return np.zeros(self.visual_embedding_dim, dtype=np.float32)
+
+    def create_text_embedding_for_image(self, image_path: Path, metadata: Dict[str, Any] = None) -> str:
+        """
+        Создает текстовое описание изображения (существующая логика)
+
+        Args:
+            image_path: Путь к изображению
+            metadata: Метаданные из JSON
+
+        Returns:
+            str: Текстовое описание для векторизации
+        """
+        return self.text_processor.create_image_embedding_text(image_path, metadata)
+
+    def process_image_multimodal(self, image_path: Path, metadata: Dict[str, Any] = None) -> Tuple[str, np.ndarray, Dict[str, Any]]:
+        """
+        Полная мультимодальная обработка изображения
+
+        Args:
+            image_path: Путь к изображению
+            metadata: Исходные метаданные
+
+        Returns:
+            Tuple[str, np.ndarray, Dict]: (текстовое_описание, визуальный_вектор, обновленные_метаданные)
+        """
+        # 1. Создаем текстовое описание
+        text_description = self.create_text_embedding_for_image(image_path, metadata)
+
+        # 2. Создаем визуальный эмбеддинг
+        visual_vector = self.create_visual_embedding(image_path)
+
+        # 3. Обновляем метаданные
+        updated_metadata = metadata.copy() if metadata else {}
+
+        # Получаем размер изображения
+        try:
+            with Image.open(image_path) as img:
+                width, height = img.size
+                updated_metadata.update({
+                    'image_width': width,
+                    'image_height': height,
+                    'image_format': img.format,
+                    'image_mode': img.mode
+                })
+        except Exception as e:
+            logger.warning(f"Не удалось получить размеры изображения {image_path}: {e}")
+
+        # Добавляем информацию о векторизации
+        updated_metadata.update({
+            'has_visual_embedding': True,
+            'visual_embedding_dim': self.visual_embedding_dim,
+            'visual_model': f'CLIP-{settings.CLIP_MODEL}',
+            'processing_device': self.device,
+            'multimodal_processing': True
+        })
+
+        logger.info(f"Мультимодальная обработка {image_path.name}: текст={len(text_description)} символов, вектор={visual_vector.shape}")
+
+        return text_description, visual_vector, updated_metadata
+
+    def search_by_text_description(self, text_query: str) -> np.ndarray:
+        """
+        Создает визуальный запрос из текстового описания
+
+        Args:
+            text_query: Текстовое описание ("красивый фасад здания")
+
+        Returns:
+            np.ndarray: Визуальный вектор, соответствующий описанию
+        """
+        try:
+            # Токенизируем текст
+            text_input = clip.tokenize([text_query]).to(self.device)
+
+            # Создаем текстовый эмбеддинг в визуальном пространстве
+            with torch.no_grad():
+                text_features = self.clip_model.encode_text(text_input)
+                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+
+            visual_query = text_features.cpu().numpy().flatten()
+
+            logger.debug(f"Создан визуальный запрос из текста '{text_query}': {visual_query.shape}")
+            return visual_query.astype(np.float32)
+
+        except Exception as e:
+            logger.error(f"Ошибка создания визуального запроса из текста '{text_query}': {e}")
+            return np.zeros(self.visual_embedding_dim, dtype=np.float32)
+
+    def get_image_categories(self, image_path: Path, candidate_categories: List[str] = None) -> Dict[str, float]:
+        """
+        Определяет категории изображения с помощью CLIP
+
+        Args:
+            image_path: Путь к изображению
+            candidate_categories: Список возможных категорий для классификации
+
+        Returns:
+            Dict[str, float]: Словарь {категория: уверенность}
+        """
+        if candidate_categories is None:
+            candidate_categories = [
+                "фасад здания", "внутренний интерьер", "техническая схема",
+                "документ", "чертеж", "план", "фотография человека",
+                "логотип", "текст документа", "электрическая схема"
+            ]
+
+        try:
+            # Загружаем изображение
+            image = Image.open(image_path).convert('RGB')
+            image_input = self.clip_preprocess(image).unsqueeze(0).to(self.device)
+
+            # Подготавливаем текстовые описания
+            text_descriptions = [f"Изображение {category}" for category in candidate_categories]
+            text_input = clip.tokenize(text_descriptions).to(self.device)
+
+            # Вычисляем сходство
+            with torch.no_grad():
+                image_features = self.clip_model.encode_image(image_input)
+                text_features = self.clip_model.encode_text(text_input)
+
+                # Нормализуем
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+
+                # Вычисляем сходство (cosine similarity)
+                similarity = (image_features @ text_features.T).squeeze(0)
+
+                # Применяем softmax для получения вероятностей
+                probabilities = torch.softmax(similarity, dim=0)
+
+            # Создаем словарь результатов
+            results = {}
+            for category, prob in zip(candidate_categories, probabilities.cpu().numpy()):
+                results[category] = float(prob)
+
+            # Сортируем по убыванию вероятности
+            results = dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
+
+            logger.debug(f"Категории для {image_path.name}: {list(results.keys())[:3]}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Ошибка определения категорий для {image_path}: {e}")
+            return {}
+
+    def cleanup_gpu_memory(self):
+        """Очищает GPU память после обработки"""
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.debug("GPU память очищена")
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """Возвращает информацию о загруженной модели"""
+        return {
+            'model_name': f'CLIP {settings.CLIP_MODEL}',
+            'device': self.device,
+            'visual_embedding_dim': self.visual_embedding_dim,
+            'cuda_available': torch.cuda.is_available() if CLIP_AVAILABLE else False,
+            'model_loaded': self.clip_model is not None,
+            'clip_available': CLIP_AVAILABLE
+        }
+
+
 # Пример конфигурации для установки EasyOCR
 def install_ocr_instructions():
     """Выводит инструкции по установке OCR"""
@@ -168,3 +420,36 @@ def install_ocr_instructions():
     # Скачайте Tesseract с https://github.com/UB-Mannheim/tesseract/wiki
     pip install pytesseract
     """)
+
+
+def check_dependencies():
+    """Проверяет доступность зависимостей для мультимодального поиска"""
+    status = {
+        'ocr_available': OCR_AVAILABLE,
+        'clip_available': CLIP_AVAILABLE,
+        'torch_available': False,
+        'cuda_available': False
+    }
+
+    if CLIP_AVAILABLE:
+        try:
+            import torch
+            status['torch_available'] = True
+            status['cuda_available'] = torch.cuda.is_available()
+        except ImportError:
+            pass
+
+    return status
+
+
+# Инициализация при импорте
+DEPENDENCIES = check_dependencies()
+
+if not DEPENDENCIES['clip_available']:
+    logger.warning("CLIP не установлен. Мультимодальный поиск недоступен.")
+    logger.info("Установите: pip install git+https://github.com/openai/CLIP.git")
+
+if DEPENDENCIES['cuda_available']:
+    logger.info("✅ CUDA доступна для ускорения обработки изображений")
+else:
+    logger.info("ℹ️ CUDA недоступна, будет использоваться CPU")
