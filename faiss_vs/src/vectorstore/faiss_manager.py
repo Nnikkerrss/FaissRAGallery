@@ -140,17 +140,99 @@ class FAISSManager:
         return embeddings.astype(np.float32)
 
     def add_chunks(self, chunks: List[TextChunk]) -> List[int]:
-        """Добавляет чанки в индекс (совместимость со старым API)"""
-        if not self.enable_visual_search:
-            # Старая логика для обычного режима
-            return self._add_chunks_legacy(chunks)
-        else:
-            # В мультимодальном режиме добавляем только как текстовые чанки
-            added_ids = []
-            for chunk in chunks:
-                text_id = self.add_text_chunk(chunk)
-                added_ids.append(text_id)
-            return added_ids
+        """Добавляет чанки в индекс"""
+        if self.index is None:
+            self.create_index()
+
+        if not chunks:
+            return []
+
+        # 🔧 ИСПРАВЛЯЕМ: Создаем тексты для векторизации ВКЛЮЧАЯ МЕТАДАННЫЕ
+        texts_for_embedding = []
+
+        for chunk in chunks:
+            # Собираем полный текст для векторизации
+            full_text_parts = [chunk.text]  # Основной текст чанка
+
+            # Добавляем важные метаданные к тексту для векторизации
+            metadata = chunk.metadata
+
+            if metadata.get('title'):
+                full_text_parts.append(f"Заголовок: {metadata['title']}")
+
+            if metadata.get('description'):
+                full_text_parts.append(f"Описание: {metadata['description']}")
+
+            if metadata.get('category'):
+                full_text_parts.append(f"Категория: {metadata['category']}")
+
+            if metadata.get('parent'):
+                full_text_parts.append(f"Раздел: {metadata['parent']}")
+
+            # Объединяем все части
+            combined_text = " ".join(full_text_parts)
+            texts_for_embedding.append(combined_text)
+
+            # 🔧 ПРИНУДИТЕЛЬНЫЙ ВЫВОД в stdout И в logger
+            debug_message = f"🔧 ВЕКТОРИЗАЦИЯ {chunk.source_file} (чанк {chunk.chunk_index}):"
+            print(debug_message)  # Прямой вывод в консоль
+            logger.info(debug_message)  # Через logger
+
+            info_message = f"   📝 Исходный: {len(chunk.text)} символов | Итоговый: {len(combined_text)} символов"
+            print(info_message)
+            logger.info(info_message)
+
+            meta_message = f"   🏷️ title='{metadata.get('title', 'НЕТ')}' | description='{metadata.get('description', 'НЕТ')}' | category='{metadata.get('category', 'НЕТ')}'"
+            print(meta_message)
+            logger.info(meta_message)
+
+            if len(combined_text) > len(chunk.text) + 50:  # Если метаданные добавились
+                added_meta = combined_text[len(chunk.text):100] + "..."
+                added_message = f"   ➕ Добавлено к тексту: '{added_meta}'"
+                print(added_message)
+                logger.info(added_message)
+            else:
+                print("   ⚠️ МЕТАДАННЫЕ НЕ ДОБАВИЛИСЬ К ТЕКСТУ!")
+                logger.warning("   ⚠️ МЕТАДАННЫЕ НЕ ДОБАВИЛИСЬ К ТЕКСТУ!")
+
+        # Создаем embeddings из расширенных текстов
+        print(f"\n🔄 Создаем embeddings для {len(texts_for_embedding)} расширенных текстов...")
+        logger.info(f"Создаем embeddings для {len(texts_for_embedding)} расширенных текстов")
+
+        embeddings = self.create_embeddings(texts_for_embedding)
+
+        # Добавляем в индекс
+        start_id = self.index.ntotal
+        self.index.add(embeddings)
+
+        print(f"✅ Embeddings созданы и добавлены в FAISS индекс")
+        logger.info(f"Embeddings созданы и добавлены в FAISS индекс")
+
+        # Сохраняем метаданные и маппинги (остальной код без изменений)
+        added_ids = []
+        for i, chunk in enumerate(chunks):
+            faiss_id = start_id + i
+            added_ids.append(faiss_id)
+
+            # Сохраняем метаданные
+            self.metadata[chunk.chunk_id] = {
+                'text': chunk.text,  # ❗ Сохраняем ИСХОДНЫЙ текст, не расширенный
+                'source_file': chunk.source_file,
+                'chunk_index': chunk.chunk_index,
+                'metadata': chunk.metadata,
+                'added_date': datetime.now().isoformat(),
+                'faiss_id': faiss_id
+            }
+
+            # Обновляем маппинги
+            self.id_to_chunk_id[faiss_id] = chunk.chunk_id
+            self.chunk_id_to_id[chunk.chunk_id] = faiss_id
+
+        final_message = f"✅ Добавлено {len(chunks)} чанков в индекс с векторизацией метаданных. Всего в индексе: {self.index.ntotal}"
+        print(final_message)
+        logger.info(final_message)
+
+        return added_ids
 
     def _add_chunks_legacy(self, chunks: List[TextChunk]) -> List[int]:
         """Старая логика добавления чанков (для совместимости)"""
@@ -203,8 +285,37 @@ class FAISSManager:
         if self.text_index is None:
             self.create_index()
 
-        # Создаем текстовый embedding
-        text_embedding = self.create_embeddings([chunk.text])
+        # 🔧 ИСПРАВЛЯЕМ: Добавляем метаданные к тексту для векторизации
+        metadata = chunk.metadata
+        full_text_parts = [chunk.text]
+
+        # Добавляем важные метаданные к тексту для векторизации
+        if metadata.get('title'):
+            full_text_parts.append(f"Заголовок: {metadata['title']}")
+        if metadata.get('description'):
+            full_text_parts.append(f"Описание: {metadata['description']}")
+        if metadata.get('category'):
+            full_text_parts.append(f"Категория: {metadata['category']}")
+        if metadata.get('parent'):
+            full_text_parts.append(f"Раздел: {metadata['parent']}")
+
+        combined_text = " ".join(full_text_parts)
+
+        # 🔧 DEBUG: Показываем что векторизуем (принудительный вывод)
+        debug_msg = f"🔧 ТЕКСТ-ТОЛЬКО {chunk.source_file} (чанк {chunk.chunk_index}):"
+        print(debug_msg)
+        logger.info(debug_msg)
+
+        size_msg = f"   📝 Исходный: {len(chunk.text)} символов → Расширенный: {len(combined_text)} символов"
+        print(size_msg)
+        logger.info(size_msg)
+
+        meta_msg = f"   🏷️ title='{metadata.get('title', 'НЕТ')}' | description='{metadata.get('description', 'НЕТ')}' | category='{metadata.get('category', 'НЕТ')}'"
+        print(meta_msg)
+        logger.info(meta_msg)
+
+        # Создаем текстовый embedding из РАСШИРЕННОГО текста
+        text_embedding = self.create_embeddings([combined_text])
 
         # Добавляем в текстовый индекс
         text_faiss_id = self.text_index.ntotal
@@ -212,7 +323,7 @@ class FAISSManager:
 
         # Сохраняем метаданные
         self.metadata[chunk.chunk_id] = {
-            'text': chunk.text,
+            'text': chunk.text,  # ❗ Сохраняем ИСХОДНЫЙ текст, не расширенный
             'source_file': chunk.source_file,
             'chunk_index': chunk.chunk_index,
             'metadata': chunk.metadata,
@@ -226,8 +337,11 @@ class FAISSManager:
         self.text_id_to_chunk_id[text_faiss_id] = chunk.chunk_id
         self.chunk_id_to_ids[chunk.chunk_id] = {'text_id': text_faiss_id, 'visual_id': None}
 
-        return text_faiss_id
+        success_msg = f"✅ Текстовый чанк добавлен: текст_id={text_faiss_id}"
+        print(success_msg)
+        logger.info(success_msg)
 
+        return text_faiss_id
     def add_multimodal_chunk(self, chunk: TextChunk, visual_vector: np.ndarray) -> Tuple[int, int]:
         """
         Добавляет мультимодальный чанк (текст + изображение)
@@ -245,12 +359,41 @@ class FAISSManager:
         if self.text_index is None or self.visual_index is None:
             self.create_index()
 
-        # 1. Добавляем текстовую часть
-        text_embedding = self.create_embeddings([chunk.text])
+        # 1. 🔧 ИСПРАВЛЕННАЯ текстовая часть с метаданными
+        metadata = chunk.metadata
+        full_text_parts = [chunk.text]
+
+        # Добавляем важные метаданные к тексту для векторизации
+        if metadata.get('title'):
+            full_text_parts.append(f"Заголовок: {metadata['title']}")
+        if metadata.get('description'):
+            full_text_parts.append(f"Описание: {metadata['description']}")
+        if metadata.get('category'):
+            full_text_parts.append(f"Категория: {metadata['category']}")
+        if metadata.get('parent'):
+            full_text_parts.append(f"Раздел: {metadata['parent']}")
+
+        combined_text = " ".join(full_text_parts)
+
+        # 🔧 DEBUG: Показываем что векторизуем (принудительный вывод)
+        debug_msg = f"🔧 МУЛЬТИМОДАЛ {chunk.source_file} (чанк {chunk.chunk_index}):"
+        print(debug_msg)
+        logger.info(debug_msg)
+
+        size_msg = f"   📝 Исходный: {len(chunk.text)} символов → Расширенный: {len(combined_text)} символов"
+        print(size_msg)
+        logger.info(size_msg)
+
+        meta_msg = f"   🏷️ title='{metadata.get('title', 'НЕТ')}' | description='{metadata.get('description', 'НЕТ')}' | category='{metadata.get('category', 'НЕТ')}'"
+        print(meta_msg)
+        logger.info(meta_msg)
+
+        # Векторизуем РАСШИРЕННЫЙ текст
+        text_embedding = self.create_embeddings([combined_text])
         text_faiss_id = self.text_index.ntotal
         self.text_index.add(text_embedding)
 
-        # 2. Добавляем визуальную часть
+        # 2. Добавляем визуальную часть (без изменений)
         # Нормализуем визуальный вектор
         if self.index_type == "FlatIP":
             normalized_visual = visual_vector / np.linalg.norm(visual_vector)
@@ -262,7 +405,7 @@ class FAISSManager:
 
         # 3. Сохраняем метаданные
         self.metadata[chunk.chunk_id] = {
-            'text': chunk.text,
+            'text': chunk.text,  # ❗ Сохраняем ИСХОДНЫЙ текст, не расширенный
             'source_file': chunk.source_file,
             'chunk_index': chunk.chunk_index,
             'metadata': chunk.metadata,
@@ -280,9 +423,11 @@ class FAISSManager:
             'visual_id': visual_faiss_id
         }
 
-        logger.info(f"Добавлен мультимодальный чанк: текст_id={text_faiss_id}, визуал_id={visual_faiss_id}")
-        return text_faiss_id, visual_faiss_id
+        success_msg = f"✅ Мультимодальный чанк добавлен: текст_id={text_faiss_id}, визуал_id={visual_faiss_id}"
+        print(success_msg)
+        logger.info(success_msg)
 
+        return text_faiss_id, visual_faiss_id
     def search(self, query: str, k: int = 5, score_threshold: float = 0.0) -> List[Dict[str, Any]]:
         """Поиск похожих документов (совместимость со старым API)"""
         if not self.enable_visual_search:
@@ -300,6 +445,7 @@ class FAISSManager:
 
         # Создаем embedding для запроса
         query_embedding = self.create_embeddings([query])
+
 
         # Выполняем поиск
         scores, indices = self.index.search(query_embedding, k)

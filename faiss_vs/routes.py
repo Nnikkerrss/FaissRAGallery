@@ -4,8 +4,9 @@ from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 import tempfile
 import os
+import sys
 from pathlib import Path
-
+sys.path.append(str(Path(__file__).parent))
 from .faiss_loader import load_documents_from_url
 from .client_info_service import ClientInfoService
 from .src.document_processor import DocumentProcessor, create_multimodal_processor, \
@@ -13,66 +14,217 @@ from .src.document_processor import DocumentProcessor, create_multimodal_process
 
 bp = Blueprint('faiss', __name__)
 
+try:
+    from .src.search.smart_search import SmartSearchEngine, SearchConfig
+    SMART_SEARCH_AVAILABLE = True
+    print("✅ Умный поиск доступен")
+except ImportError as e:
+    SMART_SEARCH_AVAILABLE = False
+    print(f"⚠️ Умный поиск недоступен: {e}")
+
 
 @bp.route("/faiss/search", methods=["POST"])
 def search():
-    """Универсальный поиск с поддержкой мультимодальности"""
+    """Поиск с поддержкой умного режима"""
     try:
         data = request.json
         client_id = data.get("client_id")
-        query = data.get("query")
+        query = data.get("query", "")
+        mode = data.get("mode", "auto")  # auto, normal, smart
+        k = data.get("k", 5)
 
         if not client_id or not query:
-            return jsonify({"error": "Требуются client_id и query"}), 400
+            return jsonify({
+                "status": "error",
+                "error": "Требуется client_id и query"
+            }), 400
 
-        # ✅ ОБНОВЛЕНО: Создаем процессор с автоопределением режима
+        # Создаем процессор
         processor = DocumentProcessor(client_id=client_id)
 
-        # Параметры поиска
-        k = data.get("k", 5)
-        min_score = data.get("min_score", 0.0)
-        search_mode = data.get("mode", "auto")  # ✅ НОВОЕ: режим поиска
-        filters = data.get("filters")
+        # ✅ НОВАЯ ЛОГИКА: Выбираем режим поиска
+        if mode == "smart" and SMART_SEARCH_AVAILABLE:
+            # Умный поиск
+            config = SearchConfig(
+                min_score_threshold=data.get("min_score", 0.3),
+                semantic_weight=data.get("semantic_weight", 0.7),
+                keyword_weight=data.get("keyword_weight", 0.3)
+            )
 
-        # Выполняем поиск
-        results = processor.search_documents(
-            query=query,
-            k=k,
-            min_score=min_score,
-            filters=filters,
-            search_mode=search_mode
-        )
+            smart_searcher = SmartSearchEngine(processor, config)
+            results = smart_searcher.smart_search(query, k=k)
 
-        # return jsonify({
-        #     "status": "ok",
-        #     "client_id": client_id,
-        #     "query": query,
-        #     "mode": search_mode,
-        #     "visual_search_enabled": processor.enable_visual_search,  # ✅ НОВОЕ
-        #     "results_count": len(results),
-        #     "results": results
-        # })
-        result_data = {
-            "status": "ok",
-            "client_id": client_id,
-            "query": query,
-            "mode": search_mode,
-            "visual_search_enabled": processor.enable_visual_search,  # ✅ НОВОЕ
-            "results_count": len(results),
-            "results": results
-        }
+            # Форматируем результаты для умного поиска
+            formatted_results = []
+            for result in results:
+                formatted_result = {
+                    "chunk_id": result.get("chunk_id"),
+                    "score": result.get("combined_score", result.get("score", 0)),
+                    "search_type": "smart",
+                    "text": result.get("text"),
+                    "source_file": result.get("source_file"),
+                    "metadata": result.get("metadata", {}),
+                    "relevance_explanation": {
+                        "original_score": result.get("original_score", 0),
+                        "keyword_score": result.get("keyword_score", 0),
+                        "intent_score": result.get("intent_score", 0),
+                        "combined_score": result.get("combined_score", 0)
+                    }
+                }
+                formatted_results.append(formatted_result)
 
-        os.makedirs('logs', exist_ok=True)
-        with open('logs/search_results.json', 'w', encoding='utf-8') as f:
-            json.dump(result_data, f, ensure_ascii=False, indent=4)
+            return jsonify({
+                "status": "ok",
+                "client_id": client_id,
+                "query": query,
+                "mode": "smart",
+                "visual_search_enabled": getattr(processor, 'enable_visual_search', False),
+                "results_count": len(formatted_results),
+                "results": formatted_results
+            })
 
-        return jsonify(result_data)
+        else:
+            # Обычный поиск (как было)
+            results = processor.search_documents(query, k=k)
+
+            formatted_results = []
+            for result in results:
+                formatted_result = {
+                    "chunk_id": result.get("chunk_id"),
+                    "score": result.get("score", 0),
+                    "search_type": "text",
+                    "text": result.get("text"),
+                    "source_file": result.get("source_file"),
+                    "metadata": result.get("metadata", {})
+                }
+                formatted_results.append(formatted_result)
+
+            return jsonify({
+                "status": "ok",
+                "client_id": client_id,
+                "query": query,
+                "mode": "normal",
+                "visual_search_enabled": getattr(processor, 'enable_visual_search', False),
+                "results_count": len(formatted_results),
+                "results": formatted_results
+            })
 
     except Exception as e:
         return jsonify({
             "status": "error",
             "error": str(e)
         }), 500
+
+
+# ✅ НОВЫЙ ENDPOINT для сравнения
+@bp.route("/faiss/search/compare", methods=["POST"])
+def compare_search():
+    """Сравнение обычного и умного поиска"""
+    try:
+        data = request.json
+        client_id = data.get("client_id")
+        query = data.get("query", "")
+        k = data.get("k", 5)
+
+        if not client_id or not query:
+            return jsonify({
+                "status": "error",
+                "error": "Требуется client_id и query"
+            }), 400
+
+        processor = DocumentProcessor(client_id=client_id)
+
+        # Обычный поиск
+        normal_results = processor.search_documents(query, k=k)
+
+        # Умный поиск (если доступен)
+        smart_results = []
+        if SMART_SEARCH_AVAILABLE:
+            smart_searcher = SmartSearchEngine(processor)
+            smart_results = smart_searcher.smart_search(query, k=k)
+
+        return jsonify({
+            "status": "ok",
+            "client_id": client_id,
+            "query": query,
+            "comparison": {
+                "normal_search": {
+                    "results_count": len(normal_results),
+                    "results": normal_results
+                },
+                "smart_search": {
+                    "available": SMART_SEARCH_AVAILABLE,
+                    "results_count": len(smart_results),
+                    "results": smart_results
+                }
+            }
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+# @bp.route("/faiss/search", methods=["POST"])
+# def search():
+#     """Универсальный поиск с поддержкой мультимодальности"""
+#     try:
+#         data = request.json
+#         client_id = data.get("client_id")
+#         query = data.get("query")
+#
+#         if not client_id or not query:
+#             return jsonify({"error": "Требуются client_id и query"}), 400
+#
+#         # ✅ ОБНОВЛЕНО: Создаем процессор с автоопределением режима
+#         processor = DocumentProcessor(client_id=client_id)
+#
+#         # Параметры поиска
+#         k = data.get("k", 5)
+#         min_score = data.get("min_score", 0.0)
+#         search_mode = data.get("mode", "auto")  # ✅ НОВОЕ: режим поиска
+#         filters = data.get("filters")
+#
+#         # Выполняем поиск
+#         results = processor.search_documents(
+#             query=query,
+#             k=k,
+#             min_score=min_score,
+#             filters=filters,
+#             search_mode=search_mode
+#         )
+#
+#         # return jsonify({
+#         #     "status": "ok",
+#         #     "client_id": client_id,
+#         #     "query": query,
+#         #     "mode": search_mode,
+#         #     "visual_search_enabled": processor.enable_visual_search,  # ✅ НОВОЕ
+#         #     "results_count": len(results),
+#         #     "results": results
+#         # })
+#         result_data = {
+#             "status": "ok",
+#             "client_id": client_id,
+#             "query": query,
+#             "mode": search_mode,
+#             "visual_search_enabled": processor.enable_visual_search,  # ✅ НОВОЕ
+#             "results_count": len(results),
+#             "results": results
+#         }
+#
+#         os.makedirs('logs', exist_ok=True)
+#         with open('logs/search_results.json', 'w', encoding='utf-8') as f:
+#             json.dump(result_data, f, ensure_ascii=False, indent=4)
+#
+#         return jsonify(result_data)
+#
+#     except Exception as e:
+#         return jsonify({
+#             "status": "error",
+#             "error": str(e)
+#         }), 500
 
 
 @bp.route("/faiss/index", methods=["GET"])
@@ -653,6 +805,436 @@ def health_check():
             "error": str(e)
         }), 500
 
+
+# Добавьте эти роуты в faiss_vs/routes.py (в конец файла, перед последним роутом)
+
+@bp.route("/faiss/materials", methods=["GET"])
+def get_materials():
+    """Получить список всех векторизованных материалов"""
+    try:
+        client_id = request.args.get('client_id')
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        source_file = request.args.get('source_file')  # Фильтр по файлу
+        category = request.args.get('category')  # Фильтр по категории
+
+        if not client_id:
+            return jsonify({
+                "status": "error",
+                "error": "Требуется client_id"
+            }), 400
+
+        processor = DocumentProcessor(client_id=client_id)
+
+        # Получаем все чанки
+        all_chunks = processor.faiss_manager.get_all_chunks()
+
+        if not all_chunks:
+            return jsonify({
+                "status": "ok",
+                "client_id": client_id,
+                "total_chunks": 0,
+                "materials": [],
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total_pages": 0
+                }
+            })
+
+        # Применяем фильтры
+        filtered_chunks = all_chunks
+
+        if source_file:
+            filtered_chunks = [chunk for chunk in filtered_chunks
+                               if chunk.get('source_file', '').lower() == source_file.lower()]
+
+        if category:
+            filtered_chunks = [chunk for chunk in filtered_chunks
+                               if chunk.get('metadata', {}).get('category', '').lower() == category.lower()]
+
+        # Пагинация
+        total_chunks = len(filtered_chunks)
+        total_pages = (total_chunks + per_page - 1) // per_page
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_chunks = filtered_chunks[start_idx:end_idx]
+
+        # Форматируем данные для ответа
+        materials = []
+        for chunk in paginated_chunks:
+            metadata = chunk.get('metadata', {})
+            material = {
+                "chunk_id": chunk.get('chunk_id'),
+                "source_file": chunk.get('source_file'),
+                "chunk_index": metadata.get('chunk_index', 0),
+                "text_preview": chunk.get('text', '')[:200] + ("..." if len(chunk.get('text', '')) > 200 else ''),
+                "text_length": len(chunk.get('text', '')),
+                "metadata": {
+                    "title": metadata.get('title'),
+                    "description": metadata.get('description'),
+                    "category": metadata.get('category'),
+                    "parent": metadata.get('parent'),
+                    "date": metadata.get('date'),
+                    "file_type": metadata.get('file_type'),
+                    "file_size": metadata.get('file_size'),
+                    "source_url": metadata.get('source_url'),
+                    "processing_date": metadata.get('processing_date'),
+                    # Дополнительные поля для изображений
+                    "is_image": metadata.get('file_type', '').lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp'],
+                    "has_visual_embedding": metadata.get('has_visual_embedding', False),
+                    "image_width": metadata.get('image_width'),
+                    "image_height": metadata.get('image_height')
+                }
+            }
+            materials.append(material)
+
+        return jsonify({
+            "status": "ok",
+            "client_id": client_id,
+            "total_chunks": total_chunks,
+            "filtered_chunks": len(filtered_chunks),
+            "materials": materials,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            },
+            "filters": {
+                "source_file": source_file,
+                "category": category
+            }
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+
+@bp.route("/faiss/materials/summary", methods=["GET"])
+def get_materials_summary():
+    """Получить сводку по материалам (статистика, категории, файлы)"""
+    try:
+        client_id = request.args.get('client_id')
+
+        if not client_id:
+            return jsonify({
+                "status": "error",
+                "error": "Требуется client_id"
+            }), 400
+
+        processor = DocumentProcessor(client_id=client_id)
+
+        # Получаем статистику индекса
+        stats = processor.get_index_statistics()
+
+        if stats.get('status') != 'ready':
+            return jsonify({
+                "status": "ok",
+                "client_id": client_id,
+                "index_status": stats.get('status', 'not_ready'),
+                "summary": None
+            })
+
+        all_chunks = processor.faiss_manager.get_all_chunks()
+
+        # Анализируем файлы
+        files_info = {}
+        categories_info = {}
+        file_types_info = {}
+
+        for chunk in all_chunks:
+            metadata = chunk.get('metadata', {})
+            source_file = chunk.get('source_file', 'unknown')
+            category = metadata.get('category', 'uncategorized')
+            file_type = metadata.get('file_type', 'unknown')
+
+            # Статистика по файлам
+            if source_file not in files_info:
+                files_info[source_file] = {
+                    "chunks_count": 0,
+                    "total_characters": 0,
+                    "file_type": file_type,
+                    "category": category,
+                    "title": metadata.get('title', ''),
+                    "description": metadata.get('description', ''),
+                    "date": metadata.get('date', ''),
+                    "file_size": metadata.get('file_size', 0),
+                    "source_url": metadata.get('source_url', ''),
+                    "is_image": file_type.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp'],
+                    "has_visual_embedding": metadata.get('has_visual_embedding', False)
+                }
+
+            files_info[source_file]["chunks_count"] += 1
+            files_info[source_file]["total_characters"] += len(chunk.get('text', ''))
+
+            # Статистика по категориям
+            if category not in categories_info:
+                categories_info[category] = {
+                    "files_count": 0,
+                    "chunks_count": 0,
+                    "file_types": set()
+                }
+
+            if source_file not in [f["source_file"] for f in categories_info[category].get("files", [])]:
+                categories_info[category]["files_count"] += 1
+
+            categories_info[category]["chunks_count"] += 1
+            categories_info[category]["file_types"].add(file_type)
+
+            # Статистика по типам файлов
+            if file_type not in file_types_info:
+                file_types_info[file_type] = {
+                    "files_count": 0,
+                    "chunks_count": 0,
+                    "total_size": 0
+                }
+
+            if source_file not in [f for f in files_info.keys() if files_info[f]["file_type"] == file_type]:
+                file_types_info[file_type]["files_count"] += 1
+                file_types_info[file_type]["total_size"] += metadata.get('file_size', 0)
+
+            file_types_info[file_type]["chunks_count"] += 1
+
+        # Конвертируем sets в lists для JSON
+        for category in categories_info:
+            categories_info[category]["file_types"] = list(categories_info[category]["file_types"])
+
+        summary = {
+            "overview": {
+                "total_files": len(files_info),
+                "total_chunks": len(all_chunks),
+                "total_categories": len(categories_info),
+                "total_file_types": len(file_types_info),
+                "images_count": sum(1 for f in files_info.values() if f["is_image"]),
+                "documents_count": sum(1 for f in files_info.values() if not f["is_image"]),
+                "visual_embeddings_count": sum(1 for f in files_info.values() if f["has_visual_embedding"])
+            },
+            "files": files_info,
+            "categories": categories_info,
+            "file_types": file_types_info,
+            "index_stats": stats
+        }
+
+        return jsonify({
+            "status": "ok",
+            "client_id": client_id,
+            "index_status": "ready",
+            "summary": summary
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+
+@bp.route("/faiss/materials/file/<path:filename>", methods=["GET"])
+def get_file_materials(filename):
+    """Получить все чанки конкретного файла"""
+    try:
+        client_id = request.args.get('client_id')
+
+        if not client_id:
+            return jsonify({
+                "status": "error",
+                "error": "Требуется client_id"
+            }), 400
+
+        processor = DocumentProcessor(client_id=client_id)
+        file_chunks = processor.faiss_manager.get_chunks_by_source(filename)
+
+        if not file_chunks:
+            return jsonify({
+                "status": "ok",
+                "client_id": client_id,
+                "filename": filename,
+                "chunks_count": 0,
+                "chunks": [],
+                "file_info": None
+            })
+
+        # Получаем информацию о файле из первого чанка
+        first_chunk = file_chunks[0]
+        metadata = first_chunk.get('metadata', {})
+
+        file_info = {
+            "filename": filename,
+            "title": metadata.get('title'),
+            "description": metadata.get('description'),
+            "category": metadata.get('category'),
+            "parent": metadata.get('parent'),
+            "date": metadata.get('date'),
+            "file_type": metadata.get('file_type'),
+            "file_size": metadata.get('file_size'),
+            "source_url": metadata.get('source_url'),
+            "processing_date": metadata.get('processing_date'),
+            "is_image": metadata.get('file_type', '').lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp'],
+            "has_visual_embedding": metadata.get('has_visual_embedding', False),
+            "total_chunks": len(file_chunks),
+            "total_characters": sum(len(chunk.get('text', '')) for chunk in file_chunks)
+        }
+
+        # Форматируем чанки
+        formatted_chunks = []
+        for chunk in file_chunks:
+            formatted_chunk = {
+                "chunk_id": chunk.get('chunk_id'),
+                "chunk_index": chunk.get('metadata', {}).get('chunk_index', 0),
+                "text": chunk.get('text'),
+                "text_length": len(chunk.get('text', '')),
+                "start_char": chunk.get('metadata', {}).get('start_char', 0),
+                "end_char": chunk.get('metadata', {}).get('end_char', 0),
+                "chunk_size": chunk.get('metadata', {}).get('chunk_size', 0)
+            }
+            formatted_chunks.append(formatted_chunk)
+
+        # Сортируем по индексу чанка
+        formatted_chunks.sort(key=lambda x: x['chunk_index'])
+
+        return jsonify({
+            "status": "ok",
+            "client_id": client_id,
+            "filename": filename,
+            "chunks_count": len(file_chunks),
+            "file_info": file_info,
+            "chunks": formatted_chunks
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+
+@bp.route("/faiss/materials/categories", methods=["GET"])
+def get_categories():
+    """Получить список всех категорий с количеством материалов"""
+    try:
+        client_id = request.args.get('client_id')
+
+        if not client_id:
+            return jsonify({
+                "status": "error",
+                "error": "Требуется client_id"
+            }), 400
+
+        processor = DocumentProcessor(client_id=client_id)
+        all_chunks = processor.faiss_manager.get_all_chunks()
+
+        categories = {}
+        files_by_category = {}
+
+        for chunk in all_chunks:
+            metadata = chunk.get('metadata', {})
+            category = metadata.get('category', 'uncategorized')
+            source_file = chunk.get('source_file', 'unknown')
+
+            if category not in categories:
+                categories[category] = {
+                    "chunks_count": 0,
+                    "files": set(),
+                    "file_types": set()
+                }
+                files_by_category[category] = set()
+
+            categories[category]["chunks_count"] += 1
+            categories[category]["files"].add(source_file)
+            categories[category]["file_types"].add(metadata.get('file_type', 'unknown'))
+            files_by_category[category].add(source_file)
+
+        # Конвертируем sets в lists и добавляем counts
+        formatted_categories = []
+        for category, info in categories.items():
+            formatted_categories.append({
+                "category": category,
+                "chunks_count": info["chunks_count"],
+                "files_count": len(info["files"]),
+                "files": list(info["files"]),
+                "file_types": list(info["file_types"])
+            })
+
+        # Сортируем по количеству файлов
+        formatted_categories.sort(key=lambda x: x['files_count'], reverse=True)
+
+        return jsonify({
+            "status": "ok",
+            "client_id": client_id,
+            "total_categories": len(formatted_categories),
+            "categories": formatted_categories
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+
+@bp.route("/faiss/materials/delete", methods=["DELETE"])
+def delete_material():
+    """Удалить материал из индекса"""
+    try:
+        data = request.json
+        client_id = data.get('client_id')
+        source_file = data.get('source_file')
+        chunk_id = data.get('chunk_id')  # Опционально - удалить конкретный чанк
+
+        if not client_id:
+            return jsonify({
+                "status": "error",
+                "error": "Требуется client_id"
+            }), 400
+
+        if not source_file and not chunk_id:
+            return jsonify({
+                "status": "error",
+                "error": "Требуется source_file или chunk_id"
+            }), 400
+
+        processor = DocumentProcessor(client_id=client_id)
+
+        if chunk_id:
+            # Удаляем конкретный чанк
+            success = processor.faiss_manager.remove_chunks([chunk_id])
+            if success:
+                processor.faiss_manager.save_index()
+                return jsonify({
+                    "status": "ok",
+                    "message": f"Чанк {chunk_id} удален",
+                    "deleted_chunks": 1
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "error": "Не удалось удалить чанк"
+                }), 500
+
+        elif source_file:
+            # Удаляем весь файл
+            success = processor.remove_document(source_file)
+            if success:
+                return jsonify({
+                    "status": "ok",
+                    "message": f"Файл {source_file} удален из индекса"
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "error": "Файл не найден или не удалось удалить"
+                }), 404
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
 @bp.route("/faiss/system_info", methods=["GET"])
 def system_info():

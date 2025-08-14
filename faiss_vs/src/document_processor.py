@@ -259,10 +259,12 @@ class DocumentProcessor:
                                   file_path: Path, doc_metadata: Any) -> Dict[str, Any]:
         """Создает расширенные метаданные"""
 
-        # Сначала копируем все из original_metadata
         enhanced_metadata = {}
 
-        # Базовые метаданные файла
+        # Сначала копируем ВСЁ из original_metadata
+        enhanced_metadata.update(original_metadata)
+
+        # Потом дополняем техническими полями
         enhanced_metadata.update({
             'file_type': file_path.suffix.lower(),
             'filename': file_path.name,
@@ -271,26 +273,23 @@ class DocumentProcessor:
             'client_id': self.client_id,
         })
 
-        # Добавляем метаданные документа (если есть)
+        # Дополняем из doc_metadata, но только если в enhanced_metadata нет значения или оно пустое
         if doc_metadata:
-            enhanced_metadata.update(doc_metadata.__dict__)
+            for key, value in doc_metadata.__dict__.items():
+                if not enhanced_metadata.get(key) and value not in (None, ''):
+                    enhanced_metadata[key] = value
 
-        # КОПИРУЕМ ВСЕ из original_metadata (БЕЗ ПЕРЕЗАПИСИ!)
-        for key, value in original_metadata.items():
-            if key not in enhanced_metadata:  # ✅ Только если ключа еще нет
-                enhanced_metadata[key] = value
-
-        # Убеждаемся что ключевые поля точно есть
-        if 'source_url' not in enhanced_metadata or not enhanced_metadata['source_url']:
+        # Гарантируем, что важные поля всегда есть
+        if not enhanced_metadata.get('source_url'):
             enhanced_metadata['source_url'] = url
 
-        if 'category' not in enhanced_metadata or not enhanced_metadata['category']:
+        if not enhanced_metadata.get('category'):
             enhanced_metadata['category'] = enhanced_metadata.get('parent', 'uncategorized')
 
-        if 'title' not in enhanced_metadata or not enhanced_metadata['title']:
+        if not enhanced_metadata.get('title'):
             enhanced_metadata['title'] = enhanced_metadata.get('description', file_path.stem)
 
-        # ОТЛАДКА
+        # Отладка
         logger.info(f"🔧 DEBUG enhanced_metadata результат для {file_path.name}:")
         logger.info(f"   enhanced_metadata['source_url']: '{enhanced_metadata.get('source_url')}'")
         logger.info(f"   enhanced_metadata['description']: '{enhanced_metadata.get('description')}'")
