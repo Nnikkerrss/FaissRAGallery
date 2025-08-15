@@ -4,7 +4,8 @@ from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 import logging
 import numpy as np
-
+import  os
+import psutil
 from .data.loaders import DocumentLoader, DocumentParser
 from .data.chunkers import DocumentChunker, TextChunk
 from .data.image_processor import ImageProcessor, MultiModalProcessor
@@ -64,20 +65,9 @@ class DocumentProcessor:
 
     def process_documents_from_json(self, json_file_path: str,
                                     update_existing: bool = False) -> Dict[str, Any]:
-        """
-        Обрабатывает документы из JSON файла с поддержкой мультимодальности
-
-        Args:
-            json_file_path: Путь к JSON файлу со списком документов
-            update_existing: Обновлять ли существующие документы
-
-        Returns:
-            Статистика обработки
-        """
         logger.info(
             f"Начинаем {'мультимодальную' if self.enable_visual_search else 'текстовую'} обработку документов из {json_file_path}")
 
-        # ✅ РАСШИРЕННАЯ статистика
         stats = {
             'total_documents': 0,
             'downloaded': 0,
@@ -90,100 +80,105 @@ class DocumentProcessor:
             'errors': [],
             'processed_files': [],
             'start_time': datetime.now().isoformat(),
-            'multimodal_mode': self.enable_visual_search  # ✅ НОВОЕ
+            'multimodal_mode': self.enable_visual_search
         }
 
         try:
-            # Загружаем и скачиваем документы
             documents_info = self.document_loader.process_json_documents(json_file_path)
             stats['total_documents'] = len(documents_info)
 
             all_chunks = []
 
             for doc_info in documents_info:
+                file_path = doc_info['file_path']
+                url = doc_info['url']
+                original_metadata = doc_info['metadata']
+
+                logger.info(f"Обрабатываем: {file_path.name}")
+
                 try:
-                    file_path = doc_info['file_path']
-                    url = doc_info['url']
-                    original_metadata = doc_info['metadata']
-
-                    logger.info(f"Обрабатываем: {file_path.name}")
-
                     # Проверяем, нужно ли обновлять существующие чанки
                     if not update_existing:
                         existing_chunks = self.faiss_manager.get_chunks_by_source(file_path.name)
                         if existing_chunks:
-                            logger.info(f"Документ {file_path.name} уже существует, пропускаем")
+                            msg = f"Документ {file_path.name} уже существует, пропускаем"
+                            logger.warning(msg)
+                            stats['errors'].append(msg)
                             continue
 
                     stats['downloaded'] += 1
 
-                    # ✅ НОВАЯ логика обработки в зависимости от типа файла
                     is_image = self._is_image_file(file_path)
 
                     if is_image:
-                        # Обработка изображения
+                        logger.debug(f"{file_path.name}: определён как изображение")
                         text, visual_vector, enhanced_metadata = self._process_image(
                             file_path, url, original_metadata
                         )
                         stats['images_processed'] += 1
-
                         if self.enable_visual_search and visual_vector is not None:
                             stats['visual_vectors_created'] += 1
-
                     else:
-                        # Обработка документа (как раньше)
-                        text, doc_metadata = self.document_parser.parse_document(file_path)
-                        visual_vector = None
+                        logger.debug(f"{file_path.name}: определён как документ")
+                        try:
+                            text, doc_metadata = self.document_parser.parse_document(file_path)
+                        except Exception as parse_err:
+                            logger.exception(f"{file_path.name}: ошибка парсинга документа")
+                            stats['errors'].append(f"{file_path.name}: ошибка парсинга: {parse_err}")
+                            continue
 
+                        visual_vector = None
                         enhanced_metadata = self._create_enhanced_metadata(
                             original_metadata, url, file_path, doc_metadata
                         )
 
                     if not text.strip():
-                        stats['errors'].append(f"Пустой текст в {file_path.name}")
-                        continue
+                        msg = f"{file_path.name}: пустой текст (длина={len(text)})"
+                        logger.warning(msg)
+                        stats['errors'].append(msg)
+                        # continue
 
                     stats['parsed'] += 1
+                    logger.debug(f"{file_path.name}: текст получен, длина={len(text)}")
 
-                    # Создаем чанки
                     chunks = self.chunker.create_chunks(text, file_path.name, enhanced_metadata)
 
-                    if chunks:
-                        # ✅ НОВАЯ логика добавления чанков
-                        for chunk in chunks:
-                            if visual_vector is not None and self.enable_visual_search:
-                                # Мультимодальный чанк
-                                self.faiss_manager.add_multimodal_chunk(chunk, visual_vector)
+                    if not chunks:
+                        msg = f"{file_path.name}: чанки не созданы"
+                        logger.warning(msg)
+                        stats['errors'].append(msg)
+                        continue
+
+                    for chunk in chunks:
+                        if visual_vector is not None and self.enable_visual_search:
+                            self.faiss_manager.add_multimodal_chunk(chunk, visual_vector)
+                        else:
+                            if self.enable_visual_search:
+                                self.faiss_manager.add_text_chunk(chunk)
                             else:
-                                # Обычный текстовый чанк (старая логика)
-                                if self.enable_visual_search:
-                                    self.faiss_manager.add_text_chunk(chunk)
-                                else:
-                                    # Полная совместимость со старым API
-                                    pass  # Будет добавлен через add_chunks ниже
+                                pass
 
-                        if not self.enable_visual_search:
-                            # Старая логика для полной совместимости
-                            self.faiss_manager.add_chunks(chunks)
+                    if not self.enable_visual_search:
+                        self.faiss_manager.add_chunks(chunks)
 
-                        all_chunks.extend(chunks)
-                        stats['chunked'] += len(chunks)
-                        stats['text_vectors_created'] += len(chunks)
+                    all_chunks.extend(chunks)
+                    stats['chunked'] += len(chunks)
+                    stats['text_vectors_created'] += len(chunks)
 
-                        stats['processed_files'].append({
-                            'filename': file_path.name,
-                            'file_type': 'image' if is_image else 'document',
-                            'chunks_count': len(chunks),
-                            'characters': len(text),
-                            'has_visual_vector': visual_vector is not None,
-                            'url': url,
-                            'metadata_keys': list(enhanced_metadata.keys())
-                        })
+                    stats['processed_files'].append({
+                        'filename': file_path.name,
+                        'file_type': 'image' if is_image else 'document',
+                        'chunks_count': len(chunks),
+                        'characters': len(text),
+                        'has_visual_vector': visual_vector is not None,
+                        'url': url,
+                        'metadata_keys': list(enhanced_metadata.keys())
+                    })
 
-                        logger.info(
-                            f"✅ {file_path.name}: {len(chunks)} чанков, визуальный={'да' if visual_vector is not None else 'нет'}")
+                    logger.info(
+                        f"✅ {file_path.name}: {len(chunks)} чанков, визуальный={'да' if visual_vector is not None else 'нет'}"
+                    )
 
-                    # ✅ НОВОЕ: Удаляем временный файл после обработки
                     if not settings.KEEP_DOWNLOADED_FILES:
                         try:
                             file_path.unlink()
@@ -192,9 +187,8 @@ class DocumentProcessor:
                             logger.warning(f"⚠️ Не удалось удалить файл {file_path.name}: {e}")
 
                 except Exception as e:
-                    error_msg = f"Ошибка при обработке {doc_info.get('file_path', 'unknown')}: {e}"
-                    logger.error(error_msg)
-                    stats['errors'].append(error_msg)
+                    logger.exception(f"{file_path.name}: критическая ошибка при обработке")
+                    stats['errors'].append(f"{file_path.name}: критическая ошибка: {e}")
                     continue
 
             # Сохраняем индекс
@@ -207,7 +201,6 @@ class DocumentProcessor:
             stats['end_time'] = datetime.now().isoformat()
             stats['success'] = True
 
-            # ✅ НОВОЕ: Очищаем GPU память если использовали CLIP
             if self.enable_visual_search and hasattr(self, 'multimodal_processor'):
                 self.multimodal_processor.cleanup_gpu_memory()
 

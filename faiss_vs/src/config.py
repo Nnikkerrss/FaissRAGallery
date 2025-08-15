@@ -1,4 +1,5 @@
 import os
+from operator import truediv
 from pathlib import Path
 
 try:
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
     # FAISS settings
     FAISS_INDEX_TYPE: str = "FlatIP"
 
+    KEEP_DOWNLOADED_FILES: bool = False  # False = удаляем файлы после обработки
+    CLEANUP_ON_ERROR: bool = True  # True = удаляем файлы даже при ошибках
     # Document processing
     MAX_FILE_SIZE_MB: int = 50
     SUPPORTED_EXTENSIONS: list = [".pdf", ".docx", ".txt", ".md", ".html", ".pptx", ".jpg", ".jpeg", ".png", ".gif",

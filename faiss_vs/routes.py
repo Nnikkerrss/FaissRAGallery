@@ -114,55 +114,6 @@ def search():
             "error": str(e)
         }), 500
 
-@bp.route("/faiss/search/compare", methods=["POST"])
-def compare_search():
-    """Сравнение обычного и умного поиска"""
-    try:
-        data = request.json
-        client_id = data.get("client_id")
-        query = data.get("query", "")
-        k = data.get("k", 5)
-
-        if not client_id or not query:
-            return jsonify({
-                "status": "error",
-                "error": "Требуется client_id и query"
-            }), 400
-
-        processor = DocumentProcessor(client_id=client_id)
-
-        # Обычный поиск
-        normal_results = processor.search_documents(query, k=k)
-
-        # Умный поиск (если доступен)
-        smart_results = []
-        if SMART_SEARCH_AVAILABLE:
-            smart_searcher = SmartSearchEngine(processor)
-            smart_results = smart_searcher.smart_search(query, k=k)
-
-        return jsonify({
-            "status": "ok",
-            "client_id": client_id,
-            "query": query,
-            "comparison": {
-                "normal_search": {
-                    "results_count": len(normal_results),
-                    "results": normal_results
-                },
-                "smart_search": {
-                    "available": SMART_SEARCH_AVAILABLE,
-                    "results_count": len(smart_results),
-                    "results": smart_results
-                }
-            }
-        })
-
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "error": str(e)
-        }), 500
-
 @bp.route("/faiss/index", methods=["GET"])
 def index():
     return {"status": "ok faiss index"}

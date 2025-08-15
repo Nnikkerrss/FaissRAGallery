@@ -175,28 +175,28 @@ class FAISSManager:
 
             # 🔧 ПРИНУДИТЕЛЬНЫЙ ВЫВОД в stdout И в logger
             debug_message = f"🔧 ВЕКТОРИЗАЦИЯ {chunk.source_file} (чанк {chunk.chunk_index}):"
-            print(debug_message)  # Прямой вывод в консоль
+            # print(debug_message)  # Прямой вывод в консоль
             logger.info(debug_message)  # Через logger
-
+            #
             info_message = f"   📝 Исходный: {len(chunk.text)} символов | Итоговый: {len(combined_text)} символов"
-            print(info_message)
+            # print(info_message)
             logger.info(info_message)
-
+            #
             meta_message = f"   🏷️ title='{metadata.get('title', 'НЕТ')}' | description='{metadata.get('description', 'НЕТ')}' | category='{metadata.get('category', 'НЕТ')}'"
-            print(meta_message)
+            # print(meta_message)
             logger.info(meta_message)
 
             if len(combined_text) > len(chunk.text) + 50:  # Если метаданные добавились
                 added_meta = combined_text[len(chunk.text):100] + "..."
                 added_message = f"   ➕ Добавлено к тексту: '{added_meta}'"
-                print(added_message)
+                # print(added_message)
                 logger.info(added_message)
             else:
                 print("   ⚠️ МЕТАДАННЫЕ НЕ ДОБАВИЛИСЬ К ТЕКСТУ!")
                 logger.warning("   ⚠️ МЕТАДАННЫЕ НЕ ДОБАВИЛИСЬ К ТЕКСТУ!")
 
         # Создаем embeddings из расширенных текстов
-        print(f"\n🔄 Создаем embeddings для {len(texts_for_embedding)} расширенных текстов...")
+        # print(f"\n🔄 Создаем embeddings для {len(texts_for_embedding)} расширенных текстов...")
         logger.info(f"Создаем embeddings для {len(texts_for_embedding)} расширенных текстов")
 
         embeddings = self.create_embeddings(texts_for_embedding)
@@ -205,7 +205,7 @@ class FAISSManager:
         start_id = self.index.ntotal
         self.index.add(embeddings)
 
-        print(f"✅ Embeddings созданы и добавлены в FAISS индекс")
+        # print(f"✅ Embeddings созданы и добавлены в FAISS индекс")
         logger.info(f"Embeddings созданы и добавлены в FAISS индекс")
 
         # Сохраняем метаданные и маппинги (остальной код без изменений)
@@ -229,7 +229,7 @@ class FAISSManager:
             self.chunk_id_to_id[chunk.chunk_id] = faiss_id
 
         final_message = f"✅ Добавлено {len(chunks)} чанков в индекс с векторизацией метаданных. Всего в индексе: {self.index.ntotal}"
-        print(final_message)
+        # print(final_message)
         logger.info(final_message)
 
         return added_ids
@@ -303,15 +303,15 @@ class FAISSManager:
 
         # 🔧 DEBUG: Показываем что векторизуем (принудительный вывод)
         debug_msg = f"🔧 ТЕКСТ-ТОЛЬКО {chunk.source_file} (чанк {chunk.chunk_index}):"
-        print(debug_msg)
+        # print(debug_msg)
         logger.info(debug_msg)
 
         size_msg = f"   📝 Исходный: {len(chunk.text)} символов → Расширенный: {len(combined_text)} символов"
-        print(size_msg)
+        # print(size_msg)
         logger.info(size_msg)
 
         meta_msg = f"   🏷️ title='{metadata.get('title', 'НЕТ')}' | description='{metadata.get('description', 'НЕТ')}' | category='{metadata.get('category', 'НЕТ')}'"
-        print(meta_msg)
+        # print(meta_msg)
         logger.info(meta_msg)
 
         # Создаем текстовый embedding из РАСШИРЕННОГО текста
@@ -338,7 +338,7 @@ class FAISSManager:
         self.chunk_id_to_ids[chunk.chunk_id] = {'text_id': text_faiss_id, 'visual_id': None}
 
         success_msg = f"✅ Текстовый чанк добавлен: текст_id={text_faiss_id}"
-        print(success_msg)
+        # print(success_msg)
         logger.info(success_msg)
 
         return text_faiss_id
@@ -377,15 +377,15 @@ class FAISSManager:
 
         # 🔧 DEBUG: Показываем что векторизуем (принудительный вывод)
         debug_msg = f"🔧 МУЛЬТИМОДАЛ {chunk.source_file} (чанк {chunk.chunk_index}):"
-        print(debug_msg)
+        # print(debug_msg)
         logger.info(debug_msg)
 
         size_msg = f"   📝 Исходный: {len(chunk.text)} символов → Расширенный: {len(combined_text)} символов"
-        print(size_msg)
+        # print(size_msg)
         logger.info(size_msg)
 
         meta_msg = f"   🏷️ title='{metadata.get('title', 'НЕТ')}' | description='{metadata.get('description', 'НЕТ')}' | category='{metadata.get('category', 'НЕТ')}'"
-        print(meta_msg)
+        # print(meta_msg)
         logger.info(meta_msg)
 
         # Векторизуем РАСШИРЕННЫЙ текст
@@ -424,7 +424,7 @@ class FAISSManager:
         }
 
         success_msg = f"✅ Мультимодальный чанк добавлен: текст_id={text_faiss_id}, визуал_id={visual_faiss_id}"
-        print(success_msg)
+        # print(success_msg)
         logger.info(success_msg)
 
         return text_faiss_id, visual_faiss_id
@@ -665,9 +665,14 @@ class FAISSManager:
             return self.index.ntotal if self.index else 0
 
     def load_index(self) -> bool:
+
+
         """Загружает индекс и метаданные с диска"""
-        if not all(path.exists() for path in [self.metadata_path, self.mappings_path, self.config_path]):
-            logger.warning("Не все файлы индекса найдены")
+        required_paths = [self.metadata_path, self.mappings_path, self.config_path]
+
+        missing_files = [str(p) for p in required_paths if not p.exists()]
+        if missing_files:
+            logger.warning(f"Отсутствуют файлы индекса: {', '.join(missing_files)}")
             return False
 
         try:

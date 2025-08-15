@@ -60,11 +60,20 @@ class DocumentChunker:
         # Предобработка
         preprocessed_text = self.preprocess_text(text)
 
+        # Если текст пустой — создаём чанк из метаданных
         if not preprocessed_text.strip():
-            return []
+            if metadata:
+                meta_summary = " | ".join(f"{k}: {v}" for k, v in metadata.items())
+                preprocessed_text = f"[Документ без извлечённого текста]\n{meta_summary}"
+            else:
+                return []
 
         # Разбиваем на чанки
         chunks_text = self.text_splitter.split_text(preprocessed_text)
+
+        # Если даже после метаданных нечего резать — один чанк из всего текста
+        if not chunks_text:
+            chunks_text = [preprocessed_text]
 
         chunks = []
         current_pos = 0
@@ -73,27 +82,18 @@ class DocumentChunker:
             if not chunk_text.strip():
                 continue
 
-            # Находим позицию чанка в оригинальном тексте
             start_pos = preprocessed_text.find(chunk_text, current_pos)
             if start_pos == -1:
                 start_pos = current_pos
 
             end_pos = start_pos + len(chunk_text)
-            current_pos = end_pos - self.chunk_overlap  # Учитываем overlap
+            current_pos = end_pos - self.chunk_overlap
 
-            # Создаем уникальный ID для чанка
             chunk_content = f"{source_file}_{i}_{chunk_text[:100]}"
             chunk_id = hashlib.md5(chunk_content.encode()).hexdigest()
 
-            # ИСПРАВЛЕНО: Правильно копируем ВСЕ метаданные в чанк
-            chunk_metadata = {}
-
-            # Сначала копируем ВСЕ исходные метаданные
-            for key, value in metadata.items():
-                chunk_metadata[key] = value
-
-            # Затем добавляем метаданные чанка (не перезаписывая исходные!)
-            chunk_specific_metadata = {
+            chunk_metadata = dict(metadata)  # копируем исходные метаданные
+            chunk_metadata.update({
                 'chunk_size': len(chunk_text),
                 'chunk_tokens_estimate': len(chunk_text.split()),
                 'chunk_index': i,
@@ -102,12 +102,7 @@ class DocumentChunker:
                 'end_char': end_pos,
                 'has_tables': 'table' in chunk_text.lower() or '|' in chunk_text,
                 'has_lists': bool(re.search(r'^\s*[\-\*\d+]\s', chunk_text, re.MULTILINE)),
-            }
-
-            # Добавляем чанк-специфичные метаданные
-            chunk_metadata.update(chunk_specific_metadata)
-
-            print(f"Чанк {i} для {source_file}: метаданных={len(chunk_metadata)}, ключи={list(chunk_metadata.keys())}")
+            })
 
             chunk = TextChunk(
                 text=chunk_text.strip(),

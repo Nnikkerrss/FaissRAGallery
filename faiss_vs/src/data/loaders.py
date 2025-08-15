@@ -161,11 +161,11 @@ class DocumentLoader:
                 for source_field, target_field in field_mapping.items():
                     if source_field in doc_info:
                         metadata[target_field] = doc_info[source_field]
-                        print(f"       Маппинг: {source_field} → {target_field} = '{doc_info[source_field]}'")
+                        # print(f"       Маппинг: {source_field} → {target_field} = '{doc_info[source_field]}'")
 
-                print(f"       URL variable: '{url}'")
-                print(f"       metadata['source_url']: '{metadata.get('source_url')}'")
-                print(f"       doc_info['ID']: '{doc_info.get('ID')}'")
+                # print(f"       URL variable: '{url}'")
+                # print(f"       metadata['source_url']: '{metadata.get('source_url')}'")
+                # print(f"       doc_info['ID']: '{doc_info.get('ID')}'")
 
                 # Затем добавляем остальные поля в нижнем регистре
                 for key, value in doc_info.items():
@@ -173,8 +173,8 @@ class DocumentLoader:
                         normalized_key = key.lower()
                         metadata[normalized_key] = value
 
-                print(f"       ФИНАЛЬНАЯ metadata['source_url']: '{metadata.get('source_url')}'")
-                print(f"       ФИНАЛЬНАЯ metadata['description']: '{metadata.get('description')}'")
+                # print(f"       ФИНАЛЬНАЯ metadata['source_url']: '{metadata.get('source_url')}'")
+                # print(f"       ФИНАЛЬНАЯ metadata['description']: '{metadata.get('description')}'")
 
                 # Добавляем стандартные маппинги ТОЛЬКО если их еще нет
                 if metadata.get('description') and not metadata.get('title'):
@@ -183,12 +183,12 @@ class DocumentLoader:
                 if metadata.get('parent') and not metadata.get('category'):
                     metadata['category'] = metadata['parent']
 
-                print(f"DEBUG: Финальные метаданные для {file_path.name}:")
-                print(f"       {len(metadata)} полей: {list(metadata.keys())}")
-                print(f"       description = '{metadata.get('description')}'")
-                print(f"       title = '{metadata.get('title')}'")
-                print(f"       parent = '{metadata.get('parent')}'")
-                print(f"       guid_doc = '{metadata.get('guid_doc')}'")
+                # print(f"DEBUG: Финальные метаданные для {file_path.name}:")
+                # print(f"       {len(metadata)} полей: {list(metadata.keys())}")
+                # print(f"       description = '{metadata.get('description')}'")
+                # print(f"       title = '{metadata.get('title')}'")
+                # print(f"       parent = '{metadata.get('parent')}'")
+                # print(f"       guid_doc = '{metadata.get('guid_doc')}'")
 
                 results.append({
                     'file_path': file_path,
