@@ -1,7 +1,6 @@
 import json
 
 from flask import Blueprint, request, jsonify
-from werkzeug.utils import secure_filename
 import tempfile
 import os
 import sys
@@ -115,8 +114,6 @@ def search():
             "error": str(e)
         }), 500
 
-
-# ✅ НОВЫЙ ENDPOINT для сравнения
 @bp.route("/faiss/search/compare", methods=["POST"])
 def compare_search():
     """Сравнение обычного и умного поиска"""
@@ -166,71 +163,9 @@ def compare_search():
             "error": str(e)
         }), 500
 
-# @bp.route("/faiss/search", methods=["POST"])
-# def search():
-#     """Универсальный поиск с поддержкой мультимодальности"""
-#     try:
-#         data = request.json
-#         client_id = data.get("client_id")
-#         query = data.get("query")
-#
-#         if not client_id or not query:
-#             return jsonify({"error": "Требуются client_id и query"}), 400
-#
-#         # ✅ ОБНОВЛЕНО: Создаем процессор с автоопределением режима
-#         processor = DocumentProcessor(client_id=client_id)
-#
-#         # Параметры поиска
-#         k = data.get("k", 5)
-#         min_score = data.get("min_score", 0.0)
-#         search_mode = data.get("mode", "auto")  # ✅ НОВОЕ: режим поиска
-#         filters = data.get("filters")
-#
-#         # Выполняем поиск
-#         results = processor.search_documents(
-#             query=query,
-#             k=k,
-#             min_score=min_score,
-#             filters=filters,
-#             search_mode=search_mode
-#         )
-#
-#         # return jsonify({
-#         #     "status": "ok",
-#         #     "client_id": client_id,
-#         #     "query": query,
-#         #     "mode": search_mode,
-#         #     "visual_search_enabled": processor.enable_visual_search,  # ✅ НОВОЕ
-#         #     "results_count": len(results),
-#         #     "results": results
-#         # })
-#         result_data = {
-#             "status": "ok",
-#             "client_id": client_id,
-#             "query": query,
-#             "mode": search_mode,
-#             "visual_search_enabled": processor.enable_visual_search,  # ✅ НОВОЕ
-#             "results_count": len(results),
-#             "results": results
-#         }
-#
-#         os.makedirs('logs', exist_ok=True)
-#         with open('logs/search_results.json', 'w', encoding='utf-8') as f:
-#             json.dump(result_data, f, ensure_ascii=False, indent=4)
-#
-#         return jsonify(result_data)
-#
-#     except Exception as e:
-#         return jsonify({
-#             "status": "error",
-#             "error": str(e)
-#         }), 500
-
-
 @bp.route("/faiss/index", methods=["GET"])
 def index():
     return {"status": "ok faiss index"}
-
 
 @bp.route("/faiss/create_index", methods=["POST"])
 def create_index():
@@ -294,9 +229,6 @@ def get_index():
             'error': f'Ошибка при получении данных: {str(e)}'
         })
 
-
-# ✅ НОВЫЕ endpoints для мультимодального поиска
-
 @bp.route("/faiss/search_multimodal", methods=["POST"])
 def search_multimodal():
     """Мультимодальный поиск с поддержкой текста и изображений"""
@@ -354,7 +286,6 @@ def search_multimodal():
             "success": False,
             "error": str(e)
         }), 500
-
 
 @bp.route("/faiss/search_similar_images", methods=["POST"])
 def search_similar_images():
@@ -418,7 +349,6 @@ def search_similar_images():
             "success": False,
             "error": str(e)
         }), 500
-
 
 @bp.route("/faiss/search_by_description", methods=["POST"])
 def search_by_description():
