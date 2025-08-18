@@ -138,7 +138,7 @@ def create_index():
     try:
         data = request.get_json()
         client_id = data["client_id"]
-        enable_visual = data.get("enable_visual_search")  # ✅ НОВОЕ: опциональный параметр
+        enable_visual = True  # ✅ НОВОЕ: опциональный параметр
 
         clientData = "https://1c.gwd.ru/services/hs/Request/GetData/GetAllFiles?api_key=5939a5cc-948b-4d78-98a7-370193831b70&client_id=" + client_id
 
@@ -456,7 +456,7 @@ def create_multimodal_index():
     try:
         data = request.json
         client_id = data["client_id"]
-        enable_visual = data.get("enable_visual_search", False)
+        enable_visual = True
 
         # URL для загрузки данных
         client_data_url = f"https://1c.gwd.ru/services/hs/Request/GetData/GetAllFiles?api_key=5939a5cc-948b-4d78-98a7-370193831b70&client_id={client_id}"
@@ -667,7 +667,7 @@ def update_client():
     try:
         data = request.get_json()
         client_id = data.get("client_id")
-        enable_visual = data.get("enable_visual_search", True)
+        enable_visual = True
 
         if not client_id:
             return jsonify({"success": False, "error": "client_id обязателен"}), 400
