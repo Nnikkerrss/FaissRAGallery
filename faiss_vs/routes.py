@@ -4,14 +4,19 @@ from flask import Blueprint, request, jsonify
 import tempfile
 import os
 import sys
+import shutil
+import logging
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
 from .faiss_loader import load_documents_from_url
 from .client_info_service import ClientInfoService
-from .src.document_processor import DocumentProcessor, create_multimodal_processor, \
-    create_text_processor  # ✅ НОВЫЕ импорты
+from .src.document_processor import DocumentProcessor, create_multimodal_processor, create_text_processor  # ✅ НОВЫЕ импорты
+from .src.config import settings
+import requests
+
 
 bp = Blueprint('faiss', __name__)
+logger = logging.getLogger(__name__)
 
 try:
     from .src.search.smart_search import SmartSearchEngine, SearchConfig
@@ -21,6 +26,10 @@ except ImportError as e:
     SMART_SEARCH_AVAILABLE = False
     print(f"⚠️ Умный поиск недоступен: {e}")
 
+@bp.route("/faiss/index", methods=["GET"])
+def index():
+    return {"status": "ok faiss index"}
+
 
 @bp.route("/faiss/search", methods=["POST"])
 def search():
@@ -28,6 +37,7 @@ def search():
     try:
         data = request.json
         client_id = data.get("client_id")
+        object_id = data.get("object_id")
         query = data.get("query", "")
         mode = data.get("mode", "auto")  # auto, normal, smart
         k = data.get("k", 5)
@@ -52,6 +62,9 @@ def search():
 
             smart_searcher = SmartSearchEngine(processor, config)
             results = smart_searcher.smart_search(query, k=k)
+
+            if object_id:
+                results = [r for r in results if str(r.get("metadata", {}).get("object_id")) == str(object_id)]
 
             # Форматируем результаты для умного поиска
             formatted_results = []
@@ -86,6 +99,9 @@ def search():
             # Обычный поиск (как было)
             results = processor.search_documents(query, k=k)
 
+            if object_id:
+                results = [r for r in results if str(r.get("metadata", {}).get("object_id")) == str(object_id)]
+
             formatted_results = []
             for result in results:
                 formatted_result = {
@@ -114,9 +130,7 @@ def search():
             "error": str(e)
         }), 500
 
-@bp.route("/faiss/index", methods=["GET"])
-def index():
-    return {"status": "ok faiss index"}
+
 
 @bp.route("/faiss/create_index", methods=["POST"])
 def create_index():
@@ -505,6 +519,186 @@ def create_multimodal_index():
             "error": f"Ошибка создания индекса: {str(e)}"
         }), 500
 
+@bp.route("/faiss/delete_client", methods=["POST"])
+def delete_client():
+    """
+    Эндпоинт для удаления всех данных клиента
+    Основан на логике quick_cleanup.py
+
+    Принимает JSON: {"client_id": "xxx"}
+    Возвращает статистику удаления
+    """
+    try:
+        # Получаем данные из запроса
+        data = request.get_json()
+        if not data or 'client_id' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Не указан client_id в запросе',
+                'error_type': 'missing_parameter'
+            }), 400
+
+        client_id = data['client_id']
+        logger.info(f"🧹 Запрос на удаление данных клиента: {client_id}")
+
+        # Создаем процессор для этого клиента
+        processor = DocumentProcessor(client_id=client_id)
+
+        # Определяем пути к данным клиента (как в quick_cleanup.py)
+        client_docs_path = settings.CLIENTS_DIR / client_id / "documents"
+        client_faiss_path = settings.FAISS_INDEX_DIR / "clients" / client_id
+
+        # Проверяем существование данных
+        if not client_docs_path.exists() and not client_faiss_path.exists():
+            return jsonify({
+                'success': False,
+                'error': f'Нет данных для клиента {client_id}',
+                'error_type': 'client_not_found',
+                'searched_paths': {
+                    'documents': str(client_docs_path),
+                    'faiss_index': str(client_faiss_path)
+                }
+            }), 404
+
+        # Собираем статистику ДО удаления
+        stats_before = {}
+        try:
+            index_stats = processor.get_index_statistics()
+            stats_before = {
+                'documents_in_index': index_stats.get('sources_count', 0),
+                'chunks_in_index': index_stats.get('total_chunks', 0),
+                'vectors_in_index': index_stats.get('total_vectors', 0)
+            }
+        except Exception:
+            # Если индекс поврежден или не загружается
+            stats_before = {'index_error': 'Не удалось загрузить статистику индекса'}
+
+        # Подсчитываем файлы для удаления
+        downloaded_files = list(client_docs_path.glob("**/*")) if client_docs_path.exists() else []
+        faiss_files = list(client_faiss_path.glob("*")) if client_faiss_path.exists() else []
+
+        # Подсчитываем размер данных
+        docs_size = sum(f.stat().st_size for f in downloaded_files if f.is_file()) / 1024 / 1024
+        faiss_size = sum(f.stat().st_size for f in faiss_files if f.is_file()) / 1024 / 1024
+        total_size_mb = docs_size + faiss_size
+
+        deletion_stats = {
+            'files_to_delete': len(downloaded_files),
+            'index_files_to_delete': len(faiss_files),
+            'estimated_size_mb': round(total_size_mb, 2)
+        }
+
+        logger.info(f"📊 Статистика перед удалением для {client_id}: {deletion_stats}")
+
+        # Выполняем удаление
+        removed_files = 0
+        removed_index_files = 0
+        errors = []
+
+        # 1. Удаляем документы клиента
+        if client_docs_path.exists():
+            try:
+                shutil.rmtree(client_docs_path)
+                removed_files = len(downloaded_files)
+                logger.info(f"✅ Удалены документы клиента: {removed_files} файлов")
+            except Exception as e:
+                error_msg = f"Ошибка при удалении документов: {str(e)}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+
+        # 2. Удаляем FAISS индекс клиента
+        if client_faiss_path.exists():
+            try:
+                shutil.rmtree(client_faiss_path)
+                removed_index_files = len(faiss_files)
+                logger.info(f"✅ Удален FAISS индекс клиента: {removed_index_files} файлов")
+            except Exception as e:
+                error_msg = f"Ошибка при удалении индекса: {str(e)}"
+                errors.append(error_msg)
+                logger.error(error_msg)
+
+        # 3. Дополнительная программная очистка (если что-то осталось)
+        try:
+            if not errors:  # Только если удаление прошло успешно
+                processor.clear_all_data()
+                logger.info("✅ Выполнена программная очистка индекса")
+        except Exception as e:
+            # Это не критично, так как файлы уже удалены
+            logger.warning(f"⚠️ Программная очистка: {str(e)}")
+
+        # Формируем ответ
+        success = len(errors) == 0
+        result = {
+            'success': success,
+            'client_id': client_id,
+            'stats_before': stats_before,
+            'deletion_summary': {
+                'removed_document_files': removed_files,
+                'removed_index_files': removed_index_files,
+                'freed_space_mb': round(total_size_mb, 2)
+            },
+            'message': f"Данные клиента {client_id} {'успешно удалены' if success else 'частично удалены'}"
+        }
+
+        if errors:
+            result['errors'] = errors
+            result['warning'] = 'Удаление завершилось с ошибками'
+
+        status_code = 200 if success else 207  # 207 = Multi-Status (частичный успех)
+
+        logger.info(f"🎉 Удаление для {client_id} завершено: {'успешно' if success else 'с ошибками'}")
+
+        return jsonify(result), status_code
+
+    except Exception as e:
+        error_msg = f"Критическая ошибка при удалении данных клиента: {str(e)}"
+        logger.error(error_msg)
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'error_type': 'internal_error'
+        }), 500
+
+@bp.route("/faiss/update_client", methods=["POST"])
+def update_client():
+    """
+    Обновляет клиента: вызывает /faiss/delete_client и /faiss/create_multimodal_index
+    """
+    try:
+        data = request.get_json()
+        client_id = data.get("client_id")
+        enable_visual = data.get("enable_visual_search", True)
+
+        if not client_id:
+            return jsonify({"success": False, "error": "client_id обязателен"}), 400
+
+        base_url = "http://localhost:8000/faiss"  # ⚠️ смотри чтобы совпадало с твоим хостом/портом
+
+        # 1. Удаление
+        delete_resp = requests.post(f"{base_url}/delete_client", json={"client_id": client_id})
+        delete_json = delete_resp.json()
+
+        # 2. Создание нового индекса
+        create_resp = requests.post(f"{base_url}/create_multimodal_index", json={
+            "client_id": client_id,
+            "enable_visual_search": enable_visual
+        })
+        create_json = create_resp.json()
+
+        return jsonify({
+            "success": True,
+            "client_id": client_id,
+            "delete_phase": delete_json,
+            "create_phase": create_json,
+            "message": f"Клиент {client_id} успешно обновлён"
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Ошибка при обновлении клиента: {e}"
+        }), 500
+
 
 @bp.route("/faiss/find_similar_to_existing", methods=["POST"])
 def find_similar_to_existing():
@@ -685,9 +879,6 @@ def health_check():
             "system_status": "unhealthy",
             "error": str(e)
         }), 500
-
-
-# Добавьте эти роуты в faiss_vs/routes.py (в конец файла, перед последним роутом)
 
 @bp.route("/faiss/materials", methods=["GET"])
 def get_materials():
@@ -1116,6 +1307,7 @@ def delete_material():
             "status": "error",
             "error": str(e)
         }), 500
+
 
 @bp.route("/faiss/system_info", methods=["GET"])
 def system_info():
